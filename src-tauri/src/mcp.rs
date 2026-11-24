@@ -1,6 +1,6 @@
 use crate::cats::{
-    all_cats, cat_exists, cat_schema_guide, cats_path, delete_custom_cat, sanitize_cat_id,
-    upsert_custom_cat, CatSkinConfig,
+    cat_exists, cat_schema_guide, cats_path, delete_custom_cat, desktop_cats, is_desktop_cat,
+    sanitize_cat_id, upsert_custom_cat, CatSkinConfig,
 };
 use crate::config::{load_settings, save_settings, set_windows_autostart};
 use serde_json::{json, Value};
@@ -16,7 +16,7 @@ fn tool_definitions() -> Value {
     json!([
         {
             "name": "list_cats",
-            "description": "List all available KuroCat desktop pet skins (built-in and custom cats) and show which cat is currently active on screen.",
+            "description": "List the available desktop pets and show which pet is active.",
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -34,7 +34,7 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "upsert_cat",
-            "description": "Create a new custom cat or update an existing cat's fur colors, coat pattern, ears, eyes, tail, whiskers, keyboard highlight color, and unique pet spots/birthmarks. Changes hot-reload immediately on the running desktop pet!",
+            "description": "Save a custom cat skin with its colors, coat pattern and markings. Custom skins are stored for reuse.",
             "inputSchema": {
                 "type": "object",
                 "required": ["cat"],
@@ -44,7 +44,7 @@ fn tool_definitions() -> Value {
                         "required": ["id", "name", "furColor"],
                         "properties": {
                             "id": { "type": "string", "description": "Unique lowercase slug ID, e.g. 'orange-tabby', 'my-calico', 'my-ragdoll'" },
-                            "name": { "type": "string", "description": "Display name shown in menu, e.g. '大橘猫', '我家三花'" },
+                            "name": { "type": "string", "description": "Name of the saved skin, e.g. '我家三花'" },
                             "emoji": { "type": "string", "description": "Optional emoji badge, e.g. '🍊'" },
                             "furColor": { "type": "string", "description": "Base coat hex color, e.g. '#f2a452'" },
                             "furSecondaryColor": { "type": "string" },
@@ -105,19 +105,19 @@ fn tool_definitions() -> Value {
                     "activate": {
                         "type": "boolean",
                         "default": true,
-                        "description": "Immediately switch the live desktop pet to this cat (default: true)."
+                        "description": "Activate the saved ID if it is available as a desktop pet (default: true)."
                     }
                 }
             }
         },
         {
             "name": "switch_cat",
-            "description": "Switch the active cat displayed on the user's Windows desktop by ID (e.g. 'black', 'ragdoll', or any custom cat ID).",
+            "description": "Switch the active desktop pet to black or duorou.",
             "inputSchema": {
                 "type": "object",
                 "required": ["id"],
                 "properties": {
-                    "id": { "type": "string", "description": "Cat ID to activate" }
+                    "id": { "type": "string", "enum": ["black", "duorou"] }
                 }
             }
         },
@@ -147,7 +147,7 @@ fn tool_definitions() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "catBreed": { "type": "string" },
+                    "catBreed": { "type": "string", "enum": ["black", "duorou"] },
                     "scale": { "type": "number", "minimum": 0.2, "maximum": 1.5 },
                     "keyboardLayout": { "type": "string", "enum": ["65", "108"] },
                     "keyboardOrientation": { "type": "string", "enum": ["cat", "viewer"] },
@@ -181,7 +181,7 @@ fn execute_tool(name: &str, args: &Value, on_change: &dyn Fn()) -> Value {
     match name {
         "list_cats" => {
             let settings = load_settings();
-            let cats = all_cats();
+            let cats = desktop_cats();
             ok_text(json!({
                 "activeCatId": settings.cat_breed,
                 "storagePath": cats_path().to_string_lossy(),
@@ -203,7 +203,7 @@ fn execute_tool(name: &str, args: &Value, on_change: &dyn Fn()) -> Value {
                     let activate = args
                         .get("activate")
                         .and_then(|v| v.as_bool())
-                        .unwrap_or(true);
+                        .unwrap_or(true) && is_desktop_cat(&saved.id);
                     if activate {
                         let mut s = load_settings();
                         s.cat_breed = saved.id.clone();
@@ -224,12 +224,8 @@ fn execute_tool(name: &str, args: &Value, on_change: &dyn Fn()) -> Value {
                 return err_text("Missing required 'id' string argument.");
             };
             let id = sanitize_cat_id(id_raw);
-            if !cat_exists(&id) {
-                let ids: Vec<String> = all_cats().into_iter().map(|c| c.id).collect();
-                return err_text(&format!(
-                    "Cat '{}' not found. Available IDs: {:?}",
-                    id, ids
-                ));
+            if !is_desktop_cat(&id) {
+                return err_text("Available desktop pets: black, duorou.");
             }
             let mut s = load_settings();
             s.cat_breed = id.clone();
@@ -270,10 +266,10 @@ fn execute_tool(name: &str, args: &Value, on_change: &dyn Fn()) -> Value {
             let mut s = load_settings();
             if let Some(breed) = args.get("catBreed").and_then(|v| v.as_str()) {
                 let clean = sanitize_cat_id(breed);
-                if cat_exists(&clean) {
+                if is_desktop_cat(&clean) {
                     s.cat_breed = clean;
                 } else {
-                    return err_text(&format!("Unknown catBreed '{}'.", clean));
+                    return err_text("Available desktop pets: black, duorou.");
                 }
             }
             if let Some(scale) = args.get("scale").and_then(|v| v.as_f64()) {
@@ -340,7 +336,7 @@ pub fn handle_jsonrpc(req: &Value, on_change: &dyn Fn()) -> Option<Value> {
                     "name": SERVER_NAME,
                     "version": SERVER_VERSION
                 },
-                "instructions": "Use get_cat_schema to inspect the custom cat design format, then call upsert_cat (with activate: true) to create or customize desktop pet cats in real time on the user's Windows desktop."
+                "instructions": "Use list_cats to see the selectable desktop pets. To save a custom skin, inspect get_cat_schema and call upsert_cat."
             }))
         }
         "ping" => Ok(json!({})),

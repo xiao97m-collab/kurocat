@@ -16,12 +16,12 @@
     </div>
 
     <div id="context-menu" class="context-menu hidden">
-      <div class="menu-header" id="menu-header">🐈‍⬛ KuroCat 小黑猫</div>
+      <div class="menu-header" id="menu-header">🐈‍⬛ KuroCat 经典小黑猫</div>
       <div class="menu-scale-row">
-        <span class="menu-scale-label">猫咪外观（支持 MCP 定制）</span>
+        <span class="menu-scale-label">桌宠外观</span>
         <div class="breed-pills" id="breed-pills">
-          <button class="breed-pill active" data-breed="black">🐈‍⬛ 小黑猫</button>
-          <button class="breed-pill" data-breed="ragdoll">🐱 布偶猫</button>
+          <button class="breed-pill active" data-breed="black">🐈‍⬛ 经典小黑猫</button>
+          <button class="breed-pill" data-breed="duorou">🐶 多肉（萨摩耶）</button>
         </div>
       </div>
       <div class="menu-sep"></div>
@@ -52,18 +52,25 @@
       </button>
       <button class="menu-item" data-action="copy-mcp" id="btn-copy-mcp">
         <span>复制 MCP 配置</span>
-        <span class="menu-hint" id="mcp-copy-hint">AI 捏猫</span>
+        <span class="menu-hint" id="mcp-copy-hint">扩展接口</span>
       </button>
       <div class="menu-sep"></div>
-      <div class="menu-scale-row">
+      <div class="menu-scale-row" id="keyboard-layout-options">
         <span class="menu-scale-label">键盘配列与方向</span>
         <div class="kb-pills">
           <button class="kb-pill active" data-kblayout="65">65% 紧凑</button>
           <button class="kb-pill" data-kblayout="108">108 全尺寸</button>
         </div>
         <div class="kb-pills">
-          <button class="kb-pill active" data-kborient="cat">面向猫咪</button>
+          <button class="kb-pill active" data-kborient="cat">面向桌宠</button>
           <button class="kb-pill" data-kborient="viewer">面向观众</button>
+        </div>
+      </div>
+      <div class="menu-scale-row" id="duorou-equipment-options" hidden>
+        <span class="menu-scale-label">多肉键鼠</span>
+        <div class="kb-pills">
+          <button class="kb-pill active" data-duorou-equipment="2d" aria-pressed="true">2D</button>
+          <button class="kb-pill" data-duorou-equipment="3d" aria-pressed="false">3D</button>
         </div>
       </div>
       <div class="menu-scale-row">

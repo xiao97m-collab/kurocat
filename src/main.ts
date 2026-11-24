@@ -6,6 +6,10 @@ import { KuroCatEngine, type KeyboardOrientation } from './catEngine';
 import { catAudio } from './audio';
 import { DEFAULT_BUILTIN_CATS, type CatSkinConfig } from './catSkins';
 import type { KeyboardLayoutId } from './keyboardLayout';
+import type { loadDuorou } from './pets/duorou';
+import type { DuorouEquipment3D } from './pets/duorou/equipment3d';
+
+const duorouId = 'duorou';
 
 interface AppSettings {
   x: number | null;
@@ -21,6 +25,7 @@ interface AppSettings {
   mcpPort: number;
   keyboardLayout: KeyboardLayoutId;
   keyboardOrientation: KeyboardOrientation;
+  duorouEquipment3d: boolean;
 }
 
 type InputEvent =
@@ -58,7 +63,7 @@ interface UpdateProgressEvent {
   info: UpdateInfo | null;
 }
 
-let appVersion = '4.6.2';
+let appVersion = '1.0.0';
 let latestUpdateInfo: UpdateInfo | null = null;
 let updateBusy = false;
 let dismissedVersion: string | null = null;
@@ -81,6 +86,7 @@ let settings: AppSettings = {
   mcpPort: 27420,
   keyboardLayout: '65',
   keyboardOrientation: 'cat',
+  duorouEquipment3d: false,
 };
 
 let catList: CatSkinConfig[] = [...DEFAULT_BUILTIN_CATS];
@@ -88,6 +94,8 @@ let catList: CatSkinConfig[] = [...DEFAULT_BUILTIN_CATS];
 const canvas = document.getElementById('pet-canvas') as HTMLCanvasElement;
 const menuEl = document.getElementById('context-menu') as HTMLDivElement;
 const breedPillsEl = document.getElementById('breed-pills') as HTMLDivElement;
+const keyboardLayoutEl = document.getElementById('keyboard-layout-options') as HTMLDivElement;
+const duorouEquipmentEl = document.getElementById('duorou-equipment-options') as HTMLDivElement;
 const scaleSliderEl = document.getElementById('scale-slider') as HTMLInputElement;
 const scaleValueEl = document.getElementById('scale-value') as HTMLButtonElement;
 const updateToastEl = document.getElementById('update-toast') as HTMLDivElement;
@@ -96,6 +104,60 @@ const btnToastInstallEl = document.getElementById('btn-toast-install') as HTMLBu
 const btnToastOpenEl = document.getElementById('btn-toast-open') as HTMLButtonElement;
 const btnToastCloseEl = document.getElementById('btn-toast-close') as HTMLButtonElement;
 const engine = new KuroCatEngine(canvas);
+type Duorou = Awaited<ReturnType<typeof loadDuorou>>;
+let duorou: Duorou | null = null;
+let duorouLoad: Promise<Duorou> | null = null;
+let activeDuorou: Duorou | null = null;
+let duorouEquipment: DuorouEquipment3D | null = null;
+let duorouEquipmentLoad: Promise<void> | null = null;
+
+function syncDuorouEquipment(): void {
+  const enabled = settings.catBreed === duorouId && settings.duorouEquipment3d && activeDuorou !== null;
+  engine.setPetEquipment3d(enabled ? duorouEquipment : null);
+  if (!enabled || duorouEquipment || duorouEquipmentLoad) return;
+
+  duorouEquipmentLoad = import('./pets/duorou/equipment3d').then(({ DuorouEquipment3D }) => {
+    if (settings.catBreed !== duorouId || !settings.duorouEquipment3d || !activeDuorou) return;
+    duorouEquipment = new DuorouEquipment3D();
+    engine.setPetEquipment3d(duorouEquipment);
+  }).catch(error => {
+    console.error('Failed to load Duorou 3D equipment:', error);
+    if (settings.catBreed === duorouId && settings.duorouEquipment3d) {
+      showUpdateToast('3D 键鼠不可用，已切回 2D', { autoHideMs: 4200 });
+      void applySettingsPatch({ duorouEquipment3d: false });
+    }
+  }).finally(() => { duorouEquipmentLoad = null; });
+}
+
+function selectDuorou(selected: boolean): void {
+  if (!selected) {
+    activeDuorou = null;
+    engine.setPetPainter(null);
+    syncDuorouEquipment();
+    return;
+  }
+  if (duorou) {
+    if (activeDuorou !== duorou) {
+      duorou.reset();
+      activeDuorou = duorou;
+      engine.setPetPainter(duorou.draw);
+    }
+    syncDuorouEquipment();
+    return;
+  }
+  if (duorouLoad) return;
+  duorouLoad = import('./pets/duorou').then(module => module.loadDuorou(engine));
+  void duorouLoad.then(pet => {
+    duorou = pet;
+    if (settings.catBreed === duorouId) selectDuorou(true);
+  }).catch(error => {
+    console.error('Failed to load Duorou:', error);
+    if (settings.catBreed === duorouId) {
+      showUpdateToast('多肉加载失败，已切回小黑猫', { autoHideMs: 4200 });
+      void applySettingsPatch({ catBreed: 'black' });
+    }
+  }).finally(() => { duorouLoad = null; });
+}
 
 function renderBreedPills(): void {
   if (!breedPillsEl) return;
@@ -106,7 +168,7 @@ function renderBreedPills(): void {
     btn.dataset.breed = cat.id;
     const emoji = cat.emoji ? `${cat.emoji} ` : '🐱 ';
     btn.textContent = `${emoji}${cat.name}`;
-    const accent = cat.accentColor || (cat.id === 'ragdoll' ? '#7ac7ff' : '#c8f538');
+    const accent = cat.accentColor || '#c8f538';
     btn.style.setProperty('--pill-accent', accent);
     btn.classList.toggle('active', cat.id === settings.catBreed);
     breedPillsEl.appendChild(btn);
@@ -141,13 +203,23 @@ function syncMenuUI(): void {
     updateScaleSliderVisual(settings.scale);
   }
 
-  const kbLayout: KeyboardLayoutId = settings.keyboardLayout === '108' ? '108' : '65';
-  const kbOrient: KeyboardOrientation = settings.keyboardOrientation === 'viewer' ? 'viewer' : 'cat';
+  const isDuorou = settings.catBreed === duorouId;
+  const kbLayout: KeyboardLayoutId = !isDuorou && settings.keyboardLayout === '108' ? '108' : '65';
+  const kbOrient: KeyboardOrientation = !isDuorou && settings.keyboardOrientation === 'viewer' ? 'viewer' : 'cat';
+  keyboardLayoutEl.hidden = isDuorou;
+  duorouEquipmentEl.hidden = !isDuorou;
+  duorouEquipmentEl.querySelectorAll<HTMLButtonElement>('[data-duorou-equipment]').forEach((btn) => {
+    const active = (btn.dataset.duorouEquipment === '3d') === Boolean(settings.duorouEquipment3d);
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', String(active));
+  });
   document.querySelectorAll<HTMLButtonElement>('[data-kblayout]').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.kblayout === kbLayout);
+    btn.disabled = isDuorou;
   });
   document.querySelectorAll<HTMLButtonElement>('[data-kborient]').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.kborient === kbOrient);
+    btn.disabled = isDuorou;
   });
 
   const activeCat = catList.find((c) => c.id === settings.catBreed) ?? catList[0];
@@ -161,12 +233,13 @@ function syncMenuUI(): void {
   }
 
   engine.showKeyBubbles = settings.showKeyBubbles;
-  engine.setCatAppearance(activeCat?.id || 'black', activeCat);
+  engine.setCatAppearance(isDuorou ? 'black' : activeCat?.id || 'black', isDuorou ? null : activeCat);
   engine.setKeyboardConfig(kbLayout, kbOrient);
+  selectDuorou(isDuorou);
   if (!sliderDragging) {
     engine.setRenderScale(settings.scale);
   }
-  catAudio.setEnabled(settings.soundEnabled);
+  catAudio.setEnabled(settings.soundEnabled && !isDuorou);
 }
 
 function closeContextMenu(): void {
@@ -215,7 +288,7 @@ async function copyMcpConfig(): Promise<void> {
       hint.textContent = '✓ 已复制';
       hint.classList.add('copied');
       setTimeout(() => {
-        hint.textContent = 'AI 捏猫';
+        hint.textContent = '扩展接口';
         hint.classList.remove('copied');
       }, 1800);
     }
@@ -416,7 +489,7 @@ async function bootstrap(): Promise<void> {
 
   btnToastOpenEl.addEventListener('click', (e) => {
     e.stopPropagation();
-    const url = latestUpdateInfo?.releaseUrl || 'https://github.com/qianyiai/kurocat/releases/latest';
+    const url = latestUpdateInfo?.releaseUrl || 'https://github.com/xiao97m-collab/kurocat/releases/latest';
     void invoke('open_release_page', { url });
   });
 
@@ -484,21 +557,27 @@ async function bootstrap(): Promise<void> {
     switch (p.kind) {
       case 'keyDown':
         engine.onKeyDown(p.vk, p.repeat);
+        activeDuorou?.keyDown(p.vk, p.repeat, performance.now());
         break;
       case 'keyUp':
         engine.onKeyUp(p.vk);
         break;
       case 'mouseMove':
-        engine.onGlobalMouseMove(p.nx, p.ny);
+        if (engine.onGlobalMouseMove(p.nx, p.ny, p.x, p.y)) {
+          activeDuorou?.mouseActivity(performance.now());
+        }
         break;
       case 'mouseDown':
         engine.onMouseDown(p.button);
+        activeDuorou?.mouseActivity(performance.now(), p.button, true);
         break;
       case 'mouseUp':
         engine.onMouseUp(p.button);
+        activeDuorou?.mouseActivity(performance.now(), p.button, false);
         break;
       case 'mouseWheel':
         engine.onMouseWheel();
+        activeDuorou?.mouseActivity(performance.now());
         break;
     }
   });
@@ -507,6 +586,7 @@ async function bootstrap(): Promise<void> {
     const c = ev.payload;
     altOverride = Boolean(c.altOverride);
     engine.onWindowCursor(c.relX, c.relY, c.overCat);
+    activeDuorou?.cursor(c.relX, c.relY, c.insideWindow, performance.now(), c.overCat);
     const interactive = !settings.clickThroughLocked || altOverride;
     canvas.classList.toggle('pet-hover', c.overCat && interactive);
   });
@@ -542,9 +622,16 @@ async function bootstrap(): Promise<void> {
 
   menuEl.addEventListener('click', (e) => {
     const target = (e.target as HTMLElement).closest<HTMLElement>(
-      '[data-action], [data-scale], [data-breed], [data-kblayout], [data-kborient]',
+      '[data-action], [data-scale], [data-breed], [data-kblayout], [data-kborient], [data-duorou-equipment]',
     );
     if (!target) return;
+
+    const equipment = target.dataset.duorouEquipment;
+    if (settings.catBreed === duorouId && (equipment === '2d' || equipment === '3d')) {
+      void applySettingsPatch({ duorouEquipment3d: equipment === '3d' });
+      closeContextMenu();
+      return;
+    }
 
     const kbLayoutAttr = target.dataset.kblayout;
     if (kbLayoutAttr === '65' || kbLayoutAttr === '108') {

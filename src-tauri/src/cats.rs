@@ -154,10 +154,10 @@ pub fn sanitize_cat_id(raw: &str) -> String {
 }
 
 pub fn builtin_cats() -> Vec<CatSkinConfig> {
-    vec![
+    let mut cats = vec![
         CatSkinConfig {
             id: "black".to_string(),
-            name: "小黑猫".to_string(),
+            name: "经典小黑猫".to_string(),
             emoji: Some("🐈‍⬛".to_string()),
             builtin: true,
             fur_color: "#141314".to_string(),
@@ -413,7 +413,27 @@ pub fn builtin_cats() -> Vec<CatSkinConfig> {
             accent_side_color: Some("#3a84c8".to_string()),
             spots: vec![],
         },
-    ]
+    ];
+    let mut duorou = cats[0].clone();
+    duorou.id = DUOROU_ID.to_string();
+    duorou.name = "多肉（萨摩耶）".to_string();
+    duorou.emoji = Some("🐶".to_string());
+    duorou.accent_color = Some("#e6cea6".to_string());
+    cats.push(duorou);
+    cats
+}
+
+pub const DUOROU_ID: &str = "duorou";
+
+pub fn is_desktop_cat(id: &str) -> bool {
+    matches!(id, "black" | DUOROU_ID)
+}
+
+pub fn desktop_cats() -> Vec<CatSkinConfig> {
+    builtin_cats()
+        .into_iter()
+        .filter(|cat| is_desktop_cat(&cat.id))
+        .collect()
 }
 
 pub fn load_custom_cats() -> Vec<CatSkinConfig> {
@@ -443,6 +463,9 @@ pub fn all_cats() -> Vec<CatSkinConfig> {
     let mut list = builtin_cats();
     let custom = load_custom_cats();
     for c in custom {
+        if c.id == DUOROU_ID {
+            continue;
+        }
         if let Some(existing) = list.iter_mut().find(|x| x.id == c.id) {
             // Allow user to customize even built-in look while preserving id
             let was_builtin = existing.builtin;
@@ -457,6 +480,9 @@ pub fn all_cats() -> Vec<CatSkinConfig> {
 
 pub fn upsert_custom_cat(mut cat: CatSkinConfig) -> Result<CatSkinConfig, String> {
     cat.id = sanitize_cat_id(&cat.id);
+    if cat.id == DUOROU_ID {
+        return Err("多肉使用内置视频动作素材".to_string());
+    }
     if cat.name.trim().is_empty() {
         cat.name = cat.id.clone();
     }
@@ -491,7 +517,7 @@ pub fn cat_exists(id: &str) -> bool {
 
 pub fn cat_schema_guide() -> serde_json::Value {
     serde_json::json!({
-        "description": "KuroCat Custom Cat Skin Schema. Pass any custom cat JSON to upsert_cat (with activate: true) to immediately add and render it live on the user's desktop!",
+        "description": "KuroCat Custom Cat Skin Schema. Pass custom cat JSON to upsert_cat to save a skin. Available desktop pets are black and duorou.",
         "patterns": {
             "solid": "Single coat color (e.g., British Shorthair blue, white Persian, golden chinchilla, black cat)",
             "bicolor": "Ragdoll / bicolor inverted-V face mask (uses maskColor, foreheadBridgeColor, flankColor)",

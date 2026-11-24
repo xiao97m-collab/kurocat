@@ -7,10 +7,10 @@ mod mcp;
 mod tray;
 mod updater;
 
-use cats::{all_cats, cat_exists, cats_path, sanitize_cat_id, CatSkinConfig};
+use cats::{cats_path, desktop_cats, CatSkinConfig, DUOROU_ID};
 use config::{
-    config_path, load_settings, normalize_keyboard_layout, normalize_keyboard_orientation,
-    save_settings, set_windows_autostart, AppSettings,
+    config_path, load_settings, normalize_cat_breed, normalize_keyboard_layout,
+    normalize_keyboard_orientation, save_settings, set_windows_autostart, AppSettings,
 };
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,6 +24,14 @@ pub const BASE_WIDTH_108: f64 = 540.0;
 pub const BASE_HEIGHT_108: f64 = 456.0;
 pub const MIN_WINDOW_WIDTH: f64 = 260.0;
 pub const MIN_WINDOW_HEIGHT: f64 = 410.0;
+
+fn pet_keyboard_layout(settings: &AppSettings) -> &str {
+    if settings.cat_breed == DUOROU_ID {
+        "65"
+    } else {
+        &settings.keyboard_layout
+    }
+}
 
 pub fn base_dimensions(layout: &str) -> (f64, f64) {
     if layout == "108" {
@@ -97,7 +105,7 @@ fn get_settings(state: State<'_, AppState>) -> AppSettings {
 
 #[tauri::command]
 fn get_cats() -> Vec<CatSkinConfig> {
-    all_cats()
+    desktop_cats()
 }
 
 #[tauri::command]
@@ -121,12 +129,7 @@ fn get_mcp_config(state: State<'_, AppState>) -> String {
 #[tauri::command]
 fn update_settings(app: AppHandle, state: State<'_, AppState>, mut patch: AppSettings) -> AppSettings {
     patch.scale = patch.scale.clamp(0.20, 1.50);
-    let clean_breed = sanitize_cat_id(&patch.cat_breed);
-    patch.cat_breed = if cat_exists(&clean_breed) {
-        clean_breed
-    } else {
-        "black".to_string()
-    };
+    patch.cat_breed = normalize_cat_breed(&patch.cat_breed);
     if patch.mcp_port == 0 {
         patch.mcp_port = 27420;
     }
@@ -135,7 +138,7 @@ fn update_settings(app: AppHandle, state: State<'_, AppState>, mut patch: AppSet
 
     let (prev_autostart, prev_scale, prev_layout) = {
         let s = state.settings.lock().unwrap();
-        (s.autostart, s.scale, s.keyboard_layout.clone())
+        (s.autostart, s.scale, pet_keyboard_layout(&s).to_string())
     };
     if patch.autostart != prev_autostart {
         let _ = set_windows_autostart(patch.autostart);
@@ -143,15 +146,14 @@ fn update_settings(app: AppHandle, state: State<'_, AppState>, mut patch: AppSet
 
     state.mcp_enabled.store(patch.mcp_enabled, Ordering::Relaxed);
 
-    let size_changed = (patch.scale - prev_scale).abs() > 0.005 || patch.keyboard_layout != prev_layout;
+    let layout = pet_keyboard_layout(&patch);
+    let size_changed = (patch.scale - prev_scale).abs() > 0.005 || layout != prev_layout;
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.set_always_on_top(patch.always_on_top);
         #[cfg(target_os = "macos")]
         configure_macos_fullscreen_overlay(&win, patch.always_on_top);
         if size_changed {
-            if let Some((nx, ny)) =
-                resize_window_anchored_bottom_right(&win, &patch.keyboard_layout, patch.scale)
-            {
+            if let Some((nx, ny)) = resize_window_anchored_bottom_right(&win, layout, patch.scale) {
                 patch.x = Some(nx);
                 patch.y = Some(ny);
             }
@@ -234,31 +236,21 @@ fn quit_app(app: AppHandle) {
 }
 
 pub fn apply_breed_and_save(app: &AppHandle, breed: &str) {
-    let clean = sanitize_cat_id(breed);
-    let normalized = if cat_exists(&clean) {
-        clean
-    } else {
-        "black".to_string()
-    };
     let state = app.state::<AppState>();
-    let updated = {
-        let mut s = state.settings.lock().unwrap();
-        s.cat_breed = normalized;
-        save_settings(&s);
-        s.clone()
-    };
-    let _ = app.emit("kuro-settings", updated);
+    let mut patch = state.settings.lock().unwrap().clone();
+    patch.cat_breed = breed.to_string();
+    update_settings(app.clone(), state, patch);
 }
 
 pub fn reload_and_emit_all(app: &AppHandle) {
     let disk_settings = load_settings();
-    let cats = all_cats();
+    let cats = desktop_cats();
     let state = app.state::<AppState>();
 
     let (size_changed, top_changed) = {
         let mut s = state.settings.lock().unwrap();
         let sc = (s.scale - disk_settings.scale).abs() > 0.01
-            || s.keyboard_layout != disk_settings.keyboard_layout;
+            || pet_keyboard_layout(&s) != pet_keyboard_layout(&disk_settings);
         let tc = s.always_on_top != disk_settings.always_on_top;
         *s = disk_settings.clone();
         (sc, tc)
@@ -274,7 +266,7 @@ pub fn reload_and_emit_all(app: &AppHandle) {
         if size_changed {
             let _ = resize_window_anchored_bottom_right(
                 &win,
-                &disk_settings.keyboard_layout,
+                pet_keyboard_layout(&disk_settings),
                 disk_settings.scale,
             );
         }
@@ -311,7 +303,7 @@ fn start_storage_watcher(app: AppHandle) {
 pub fn apply_scale_and_save(app: &AppHandle, scale: f64) {
     let clamped = scale.clamp(0.20, 1.50);
     let state = app.state::<AppState>();
-    let layout = { state.settings.lock().unwrap().keyboard_layout.clone() };
+    let layout = { pet_keyboard_layout(&state.settings.lock().unwrap()).to_string() };
     let new_pos = app
         .get_webview_window("main")
         .and_then(|win| resize_window_anchored_bottom_right(&win, &layout, clamped));
@@ -331,10 +323,14 @@ pub fn apply_scale_and_save(app: &AppHandle, scale: f64) {
 pub fn apply_keyboard_layout_and_save(app: &AppHandle, layout: &str) {
     let normalized = normalize_keyboard_layout(layout);
     let state = app.state::<AppState>();
-    let cur_scale = { state.settings.lock().unwrap().scale };
-    let new_pos = app
-        .get_webview_window("main")
-        .and_then(|win| resize_window_anchored_bottom_right(&win, &normalized, cur_scale));
+    let (cur_scale, is_duorou) = {
+        let settings = state.settings.lock().unwrap();
+        (settings.scale, settings.cat_breed == DUOROU_ID)
+    };
+    let effective_layout = if is_duorou { "65" } else { &normalized };
+    let new_pos = app.get_webview_window("main").and_then(|win| {
+        resize_window_anchored_bottom_right(&win, effective_layout, cur_scale)
+    });
     let updated = {
         let mut s = state.settings.lock().unwrap();
         s.keyboard_layout = normalized;
@@ -551,6 +547,16 @@ fn is_over_interactive_silhouette(rx: f64, ry: f64, is_108: bool) -> (bool, bool
     (over_cat || over_desk, over_cat)
 }
 
+fn is_over_duorou(rx: f64, ry: f64) -> (bool, bool) {
+    let in_oval = |cx: f64, cy: f64, w: f64, h: f64| {
+        ((rx - cx) / w).powi(2) + ((ry - cy) / h).powi(2) <= 1.0
+    };
+    let body = in_oval(0.53, 0.39, 0.16, 0.24) || in_oval(0.50, 0.64, 0.21, 0.13);
+    let keyboard = (0.30..=0.73).contains(&rx) && (0.69..=0.84).contains(&ry);
+    let mouse = in_oval(0.266, 0.746, 0.045, 0.05);
+    (body || keyboard || mouse, body)
+}
+
 fn start_hit_test_loop(
     app: AppHandle,
     settings: Arc<Mutex<AppSettings>>,
@@ -600,14 +606,14 @@ fn start_hit_test_loop(
             let rx = (cx - pos.x) as f64 / w;
             let ry = (cy - pos.y) as f64 / h;
             let inside = rx >= 0.0 && rx <= 1.0 && ry >= 0.0 && ry <= 1.0;
-            let (locked, always_on_top, is_108, cur_scale, layout_str) = {
+            let (locked, always_on_top, is_duorou, cur_scale, layout_str) = {
                 let s = settings.lock().unwrap();
                 (
                     s.click_through_locked,
                     s.always_on_top,
-                    s.keyboard_layout == "108",
+                    s.cat_breed == DUOROU_ID,
                     s.scale.clamp(0.20, 1.50),
-                    s.keyboard_layout.clone(),
+                    pet_keyboard_layout(&s).to_string(),
                 )
             };
 
@@ -649,8 +655,10 @@ fn start_hit_test_loop(
             let pet_ry = (ry - pet_y0) / pet_h_frac;
             let inside_pet = pet_rx >= 0.0 && pet_rx <= 1.0 && pet_ry >= 0.0 && pet_ry <= 1.0;
 
-            let (over_interactive, raw_over_cat) = if inside_pet {
-                is_over_interactive_silhouette(pet_rx, pet_ry, is_108)
+            let (over_interactive, raw_over_cat) = if inside_pet && is_duorou {
+                is_over_duorou(pet_rx, pet_ry)
+            } else if inside_pet {
+                is_over_interactive_silhouette(pet_rx, pet_ry, layout_str == "108")
             } else {
                 (false, false)
             };
@@ -764,7 +772,7 @@ pub fn run() {
                     let _ = win.set_visible_on_all_workspaces(true);
                     configure_macos_fullscreen_overlay(&win, s.always_on_top);
                 }
-                let (win_w, win_h) = window_dimensions(&s.keyboard_layout, s.scale);
+                let (win_w, win_h) = window_dimensions(pet_keyboard_layout(&s), s.scale);
                 let _ = win.set_size(Size::Logical(LogicalSize::new(win_w, win_h)));
                 if let (Some(x), Some(y)) = (s.x, s.y) {
                     let _ = win.set_position(PhysicalPosition::new(x, y));

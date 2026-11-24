@@ -118,6 +118,10 @@ body {
   gap: 6px;
 }
 
+.menu-scale-row[hidden] {
+  display: none;
+}
+
 .menu-scale-label {
   font-size: 11.5px;
   color: #9ca3af;

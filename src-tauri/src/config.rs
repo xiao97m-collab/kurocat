@@ -42,6 +42,15 @@ pub fn normalize_keyboard_orientation(raw: &str) -> String {
     }
 }
 
+pub fn normalize_cat_breed(raw: &str) -> String {
+    let id = crate::cats::sanitize_cat_id(raw);
+    if crate::cats::is_desktop_cat(&id) {
+        id
+    } else {
+        default_cat_breed()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -63,6 +72,8 @@ pub struct AppSettings {
     pub keyboard_layout: String,
     #[serde(default = "default_keyboard_orientation")]
     pub keyboard_orientation: String,
+    #[serde(default, rename = "duorouEquipment3d")]
+    pub duorou_equipment_3d: bool,
 }
 
 impl Default for AppSettings {
@@ -81,6 +92,7 @@ impl Default for AppSettings {
             mcp_port: default_mcp_port(),
             keyboard_layout: default_keyboard_layout(),
             keyboard_orientation: default_keyboard_orientation(),
+            duorou_equipment_3d: false,
         }
     }
 }
@@ -120,6 +132,7 @@ pub fn load_settings() -> AppSettings {
     if let Ok(content) = fs::read_to_string(&path) {
         if let Ok(mut parsed) = serde_json::from_str::<AppSettings>(&content) {
             parsed.scale = parsed.scale.clamp(0.20, 1.50);
+            parsed.cat_breed = normalize_cat_breed(&parsed.cat_breed);
             return parsed;
         }
     }

@@ -9,7 +9,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Emitter, Manager};
 
 pub fn setup_tray(app: &AppHandle, initial: &AppSettings) -> tauri::Result<()> {
-    let toggle_show = MenuItem::with_id(app, "toggle_show", "显示 / 隐藏小黑猫", true, None::<&str>)?;
+    let toggle_show = MenuItem::with_id(app, "toggle_show", "显示 / 隐藏桌宠", true, None::<&str>)?;
     let pause_guard = CheckMenuItem::with_id(
         app,
         "pause_guard",
@@ -68,23 +68,12 @@ pub fn setup_tray(app: &AppHandle, initial: &AppSettings) -> tauri::Result<()> {
     )?;
 
     let breed_black = MenuItem::with_id(app, "breed_black", "经典小黑猫", true, None::<&str>)?;
-    let breed_ragdoll = MenuItem::with_id(app, "breed_ragdoll", "暖奶茶布偶猫", true, None::<&str>)?;
-    let breed_orange = MenuItem::with_id(app, "breed_orange", "大橘猫（虎斑）", true, None::<&str>)?;
-    let breed_calico = MenuItem::with_id(app, "breed_calico", "三花猫", true, None::<&str>)?;
-    let breed_tuxedo = MenuItem::with_id(app, "breed_tuxedo", "奶牛猫", true, None::<&str>)?;
-    let breed_siamese = MenuItem::with_id(app, "breed_siamese", "暹罗猫", true, None::<&str>)?;
+    let breed_duorou = MenuItem::with_id(app, "breed_duorou", "多肉（萨摩耶）", true, None::<&str>)?;
     let breed_menu = Submenu::with_items(
         app,
-        "猫咪外观",
+        "桌宠外观",
         true,
-        &[
-            &breed_black,
-            &breed_ragdoll,
-            &breed_orange,
-            &breed_calico,
-            &breed_tuxedo,
-            &breed_siamese,
-        ],
+        &[&breed_black, &breed_duorou],
     )?;
 
     let scale_25 = MenuItem::with_id(app, "scale_25", "25%（迷你）", true, None::<&str>)?;
@@ -387,11 +376,7 @@ pub fn setup_tray(app: &AppHandle, initial: &AppSettings) -> tauri::Result<()> {
                     let _ = app.emit("kuro-settings", s.clone());
                 }
                 "breed_black" => apply_breed_and_save(app, "black"),
-                "breed_ragdoll" => apply_breed_and_save(app, "ragdoll"),
-                "breed_orange" => apply_breed_and_save(app, "orange-tabby"),
-                "breed_calico" => apply_breed_and_save(app, "calico"),
-                "breed_tuxedo" => apply_breed_and_save(app, "tuxedo"),
-                "breed_siamese" => apply_breed_and_save(app, "siamese"),
+                "breed_duorou" => apply_breed_and_save(app, crate::cats::DUOROU_ID),
                 "scale_25" => apply_scale_and_save(app, 0.25),
                 "scale_50" => apply_scale_and_save(app, 0.5),
                 "scale_75" => apply_scale_and_save(app, 0.75),

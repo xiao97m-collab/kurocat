@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
 
-const REPO_API_LATEST: &str = "https://api.github.com/repos/qianyiai/kurocat/releases/latest";
-const REPO_RELEASES_PAGE: &str = "https://github.com/qianyiai/kurocat/releases/latest";
+const REPO_API_LATEST: &str = "https://api.github.com/repos/xiao97m-collab/kurocat/releases/latest";
+const REPO_RELEASES_PAGE: &str = "https://github.com/xiao97m-collab/kurocat/releases/latest";
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -93,6 +93,24 @@ fn detect_install_kind() -> &'static str {
     }
 }
 
+fn select_macos_asset(assets: &[GhAsset], apple_silicon: bool) -> Option<&GhAsset> {
+    let suffixes: &[&str] = if apple_silicon {
+        &[
+            "-macos-arm64.app.tar.gz",
+            "-macos-universal.app.tar.gz",
+            "-macos-arm64.dmg",
+            "-macos-universal.dmg",
+        ]
+    } else {
+        &["-macos-universal.app.tar.gz", "-macos-universal.dmg"]
+    };
+    suffixes.iter().find_map(|suffix| {
+        assets
+            .iter()
+            .find(|asset| asset.name.to_ascii_lowercase().ends_with(*suffix))
+    })
+}
+
 fn select_asset<'a>(assets: &'a [GhAsset], install_kind: &str) -> Option<&'a GhAsset> {
     let want_108 = cfg!(feature = "layout-108");
     match install_kind {
@@ -129,14 +147,7 @@ fn select_asset<'a>(assets: &'a [GhAsset], install_kind: &str) -> Option<&'a GhA
                     .iter()
                     .find(|a| a.name.to_ascii_lowercase().ends_with("-setup.exe"))
             }),
-        "macos-app" => assets
-            .iter()
-            .find(|a| a.name.to_ascii_lowercase().ends_with("-macos-universal.app.tar.gz"))
-            .or_else(|| {
-                assets
-                    .iter()
-                    .find(|a| a.name.to_ascii_lowercase().ends_with("-macos-universal.dmg"))
-            }),
+        "macos-app" => select_macos_asset(assets, cfg!(target_arch = "aarch64")),
         _ => None,
     }
 }
@@ -669,5 +680,33 @@ mod tests {
             Some("05c1be2c444f5303770f6d59e216bc0ed7b69321fc44368e4ec231405570f950")
         );
         assert_eq!(extract_sha256(&Some("sha256:short".to_string())), None);
+    }
+
+    #[test]
+    fn apple_silicon_prefers_an_update_archive_and_intel_ignores_arm64_assets() {
+        let assets = [
+            "KuroCat-v1.1.0-macos-arm64.dmg",
+            "KuroCat-v1.1.0-macos-arm64.app.tar.gz",
+            "KuroCat-v1.1.0-macos-universal.app.tar.gz",
+        ]
+        .map(|name| GhAsset {
+            name: name.to_string(),
+            browser_download_url: String::new(),
+            size: None,
+            digest: None,
+        });
+        assert_eq!(
+            select_macos_asset(&assets, true).unwrap().name,
+            assets[1].name
+        );
+        assert_eq!(
+            select_macos_asset(&assets, false).unwrap().name,
+            assets[2].name
+        );
+        assert_eq!(
+            select_macos_asset(&assets[..1], true).unwrap().name,
+            assets[0].name
+        );
+        assert!(select_macos_asset(&assets[..2], false).is_none());
     }
 }

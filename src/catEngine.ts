@@ -9,11 +9,14 @@ import {
 } from './keyboardLayout';
 import { catAudio } from './audio';
 import { resolveCustomSkin, type CatSkinConfig, type ResolvedSkin } from './catSkins';
+import type { DuorouEquipment3D } from './pets/duorou/equipment3d';
+import { drawSleepIndicator } from './pets/sleep-indicator';
 
 export const LOGICAL_W = 420;
 export const LOGICAL_H = 440;
 export type CatBreed = 'black' | 'ragdoll';
 export type KeyboardOrientation = 'cat' | 'viewer';
+const AUTO_SLEEP_DELAY = 28_000;
 
 interface Vec2 {
   x: number;
@@ -42,7 +45,7 @@ interface PawState {
   curlWeight: number;
   pokeTime: number;
   impactSquash: number;
-  lastActiveAt: number;
+  lastKeyStrikeAt: number;
   smears: SmearFrame[];
 }
 
@@ -64,6 +67,21 @@ interface KeyAnim {
   pressAmount: number;
   lastHitAt: number;
 }
+
+interface TailStrike {
+  keyId: string;
+  target: Vec2;
+  startedAt: number;
+  reach: number;
+  pressure: number;
+}
+
+const TYPING_WINDOW = 800;
+const MOUSE_ACTIVITY_WINDOW = 320;
+const TAIL_REACH_TIME = 90;
+const TAIL_CONTACT_TIME = 40;
+const TAIL_RETURN_TIME = 150;
+const MODIFIER_KEYS = new Set(['lshift', 'rshift', 'lctrl', 'rctrl', 'lalt', 'ralt', 'lwin', 'rwin', 'caps']);
 
 // Exact measured pixel silhouette half-width profile from original video 0.3s (compact chubby sitting cat!)
 // t = 0.0 (ear tips) -> t = 1.0 (bottom base flush on keyboard)
@@ -87,6 +105,10 @@ export class KuroCatEngine {
   private rafId = 0;
   private lastTime = 0;
   private elapsed = 0;
+  private lastInteractionAt = performance.now();
+  private mouseMotionAnchor: Vec2 | null = null;
+  private sleepStartedAt: number | null = null;
+  private sleepDepth = 0;
 
   public showKeyBubbles = true;
   public catBreed: CatBreed = 'black';
@@ -95,6 +117,58 @@ export class KuroCatEngine {
   public keyboardOrientation: KeyboardOrientation = 'cat';
   private renderScale = 1.0;
   private embedded = false;
+  private petPainter: ((ctx: CanvasRenderingContext2D, now: number, sleepReady: boolean) => void) | null = null;
+  private petEquipment3d: DuorouEquipment3D | null = null;
+
+  public setPetPainter(painter: ((ctx: CanvasRenderingContext2D, now: number, sleepReady: boolean) => void) | null): void {
+    if (painter !== this.petPainter) {
+      this.lastInteractionAt = performance.now();
+      this.sleepStartedAt = null;
+      this.sleepDepth = 0;
+    }
+    this.petPainter = painter;
+  }
+
+  public setPetEquipment3d(equipment: DuorouEquipment3D | null): void {
+    this.petEquipment3d = equipment;
+  }
+
+  public paintPetEquipment(ctx: CanvasRenderingContext2D, item: 'keyboard' | 'mouse'): void {
+    const equipment = this.petEquipment3d;
+    if (item === 'keyboard') {
+      if (equipment?.isAvailable()) {
+        equipment.update(this.lastTime, this.keyAnims, this.mouseLeftPress > 0.2, this.mouseRightPress > 0.2,
+          Math.max(this.mouseScrollFlash, this.mouseMiddlePress));
+        ctx.save();
+        ctx.translate(this.kbCenterX, this.kbCenterY + this.kbBounce * 1.1);
+        ctx.rotate(this.kbTiltRad);
+        equipment.draw(ctx, item);
+        ctx.restore();
+      } else {
+        this.drawKeyboard(ctx);
+      }
+      if (this.showKeyBubbles) this.drawKeyBubbles(ctx);
+    } else {
+      if (equipment?.isAvailable()) {
+        ctx.save();
+        ctx.translate(this.mouseBaseX + this.mouseOffsetX, this.mouseBaseY + this.mouseOffsetY);
+        equipment.draw(ctx, item);
+        ctx.restore();
+      } else {
+        this.drawMiniMouse(ctx);
+      }
+      if (this.showKeyBubbles) this.drawMouseBadges(ctx);
+    }
+  }
+
+  public getPetMouse(): { base: [number, number]; offset: [number, number] } {
+    return { base: [this.mouseBaseX, this.mouseBaseY], offset: [this.mouseOffsetX, this.mouseOffsetY] };
+  }
+
+  public showPetKeyContact(keyId: string): void {
+    const key = this.keyAnims.get(keyId);
+    if (key) key.pressAmount = Math.max(key.pressAmount, 0.77);
+  }
 
   public setRenderScale(scale: number): void {
     this.renderScale = Math.max(0.2, Math.min(1.5, scale));
@@ -121,6 +195,9 @@ export class KuroCatEngine {
     const nextLayout: KeyboardLayoutId = layout === '108' ? '108' : '65';
     const nextOrientation: KeyboardOrientation = orientation === 'viewer' ? 'viewer' : 'cat';
     const layoutChanged = this.keyboardLayout !== nextLayout;
+    if (layoutChanged || this.keyboardOrientation !== nextOrientation) {
+      this.tailStrike = null;
+    }
     this.keyboardLayout = nextLayout;
     this.keyboardOrientation = nextOrientation;
 
@@ -189,7 +266,8 @@ export class KuroCatEngine {
   private mouseRightPress = 0;
   private mouseMiddlePress = 0;
   private mouseScrollFlash = 0;
-  private lastMouseMoveAt = -10000;
+  private lastMouseActivityAt = -10000;
+  private lastMouseMotionAt = -10000;
   private mouseBadges: Array<{
     id: number;
     label: string;
@@ -233,6 +311,7 @@ export class KuroCatEngine {
   private earTwitchLeft = 0;
   private earTwitchRight = 0;
   private recentKeyTimes: number[] = [];
+  private fastTyping = false;
   private typingEnergy = 0;
   private lastAnyKeyAt = -10000;
 
@@ -240,6 +319,8 @@ export class KuroCatEngine {
   private leftPaw: PawState;
   private rightPaw: PawState;
   private lastSpacePaw: 'left' | 'right' = 'left';
+  private tailStrike: TailStrike | null = null;
+  private lastTailStrikeAt = -10000;
 
   // Keys & bubbles
   private keyAnims = new Map<string, KeyAnim>();
@@ -274,7 +355,7 @@ export class KuroCatEngine {
       curlWeight: 0,
       pokeTime: 1,
       impactSquash: 0,
-      lastActiveAt: -10000,
+      lastKeyStrikeAt: -10000,
       smears: [],
     };
 
@@ -290,7 +371,7 @@ export class KuroCatEngine {
       curlWeight: 0,
       pokeTime: 1,
       impactSquash: 0,
-      lastActiveAt: -10000,
+      lastKeyStrikeAt: -10000,
       smears: [],
     };
 
@@ -308,6 +389,7 @@ export class KuroCatEngine {
 
   public start(): void {
     this.lastTime = performance.now();
+    this.lastInteractionAt = this.lastTime;
     const tick = (now: number) => {
       const dt = Math.min(0.05, Math.max(0.001, (now - this.lastTime) / 1000));
       this.lastTime = now;
@@ -332,7 +414,7 @@ export class KuroCatEngine {
     const leanAmp = this.keyboardLayout === '108' ? 76 : 46;
     const leanX = (this.spineLean * leanAmp + this.typingSway * 25 + this.strikeRock * 10) * shearCurve;
     const swayDipY = Math.abs(this.typingSway) * 4.0 * shearCurve;
-    const hunchY = (this.typingHunch * 13 + this.bodyBob * 4.8 + breath) * shearCurve + swayDipY;
+    const hunchY = (this.typingHunch * 13 + this.bodyBob * 4.8 + breath + this.sleepDepth * 34) * shearCurve + swayDipY;
     // Slight forward drop when leaning deeply to the mouse
     const leanDropY = Math.abs(this.spineLean) * 6 * shearCurve;
     return {
@@ -364,6 +446,7 @@ export class KuroCatEngine {
 
   public onKeyDown(vk: number, repeat: boolean): void {
     const now = performance.now();
+    this.lastInteractionAt = now;
     const spec = resolveKeyByVk(vk, this.keyboardLayout);
     if (!spec) return;
 
@@ -377,8 +460,12 @@ export class KuroCatEngine {
     if (repeat) return;
 
     this.lastAnyKeyAt = now;
-    this.recentKeyTimes.push(now);
-    if (this.recentKeyTimes.length > 26) this.recentKeyTimes.shift();
+    const isTypingKey = !MODIFIER_KEYS.has(spec.id);
+    if (isTypingKey) {
+      this.recentKeyTimes.push(now);
+      if (this.recentKeyTimes.length > 26) this.recentKeyTimes.shift();
+    }
+    this.updateTypingSpeed(now);
 
     this.bodyBob = Math.min(1.15, this.bodyBob + 0.65);
     this.kbBounce = Math.min(1, this.kbBounce + 0.45);
@@ -400,7 +487,13 @@ export class KuroCatEngine {
     let targetPoint = this.getKeyWorldCenter(spec);
     let chosen: PawState;
 
-    const activelyMousing = this.mouseLeftDown || this.mouseRightDown || now - this.lastMouseMoveAt < 320;
+    const activelyMousing = this.isMouseActive(now);
+    const tailStrike = activelyMousing && isTypingKey ? this.tryTailStrike(spec, now) : null;
+    if (tailStrike) {
+      this.showKeyBubble(vk, spec, tailStrike.target.x, now);
+      return;
+    }
+
     const splitCol =
       this.keyboardLayout === '108'
         ? isCatFacing
@@ -408,13 +501,21 @@ export class KuroCatEngine {
           : 8.4
         : 7.5;
 
-    if (spec.id === 'space') {
-      if (activelyMousing) {
-        chosen = this.rightPaw;
-      } else {
-        this.lastSpacePaw = this.lastSpacePaw === 'left' ? 'right' : 'left';
-        chosen = this.lastSpacePaw === 'left' ? this.leftPaw : this.rightPaw;
+    if (activelyMousing) {
+      chosen = this.rightPaw;
+    } else if (spec.id === 'space') {
+      this.lastSpacePaw = this.lastSpacePaw === 'left' ? 'right' : 'left';
+      chosen = this.lastSpacePaw === 'left' ? this.leftPaw : this.rightPaw;
+    } else {
+      chosen = screenKeyCol < splitCol ? this.leftPaw : this.rightPaw;
+      const other = chosen.side === 'left' ? this.rightPaw : this.leftPaw;
+      if (this.fastTyping && isTypingKey && now - chosen.lastKeyStrikeAt < 220 &&
+          other.mode !== 'poke' && Math.abs(targetPoint.x - this.getLiveShoulder(other, 0).x) <= 150) {
+        chosen = other;
       }
+    }
+
+    if (spec.id === 'space') {
       const spaceU = isCatFacing
         ? chosen.side === 'left'
           ? spec.uStart + spec.uWidth * 0.68
@@ -424,12 +525,6 @@ export class KuroCatEngine {
           : spec.uStart + spec.uWidth * 0.68;
       const rY = spec.rowY ?? spec.row;
       targetPoint = this.projectKeyboardPoint(spaceU, rY + 0.50);
-    } else if (activelyMousing) {
-      chosen = this.rightPaw;
-    } else if (screenKeyCol < splitCol) {
-      chosen = this.leftPaw;
-    } else {
-      chosen = this.rightPaw;
     }
 
     const sideSign = chosen.side === 'left' ? -1 : 1;
@@ -460,37 +555,95 @@ export class KuroCatEngine {
     chosen.target = this.clampToKeyboardSurface(targetPoint);
     chosen.pokeTime = 0;
     chosen.impactSquash = 0.85;
-    chosen.lastActiveAt = now;
+    chosen.lastKeyStrikeAt = now;
 
     const other = chosen.side === 'left' ? this.rightPaw : this.leftPaw;
     if (other.mode === 'idle' && !activelyMousing) {
       other.mode = 'curled';
-      other.lastActiveAt = now;
     }
 
-    if (this.showKeyBubbles) {
-      const label = formatBubbleForVk(vk, spec);
-      if (label) {
-        this.spawnBubble(label, spec.id === 'space', targetPoint.x, now);
-      }
+    this.showKeyBubble(vk, spec, targetPoint.x, now);
+  }
+
+  private showKeyBubble(vk: number, spec: KeySpec, x: number, now: number): void {
+    if (!this.showKeyBubbles) return;
+    const label = formatBubbleForVk(vk, spec);
+    if (label) this.spawnBubble(label, spec.id === 'space', x, now);
+  }
+
+  private updateTypingSpeed(now: number): void {
+    while (this.recentKeyTimes.length > 0 && now - this.recentKeyTimes[0] > TYPING_WINDOW) {
+      this.recentKeyTimes.shift();
     }
+    this.fastTyping = this.recentKeyTimes.length >= (this.fastTyping ? 3 : 5);
+  }
+
+  private isMouseActive(now: number): boolean {
+    return this.mouseLeftDown || this.mouseRightDown || this.mouseMiddleDown ||
+      now - this.lastMouseActivityAt < MOUSE_ACTIVITY_WINDOW;
+  }
+
+  private getTailRoot(): Vec2 {
+    const hip = this.spinePoint(0.84, 0);
+    return { x: hip.x + 56, y: hip.y - 2 };
+  }
+
+  private tryTailStrike(spec: KeySpec, now: number): TailStrike | null {
+    if (!this.fastTyping || now - this.lastMouseMotionAt >= MOUSE_ACTIVITY_WINDOW ||
+        now - this.lastTailStrikeAt < 450) return null;
+
+    const target = this.projectKeyboardPoint(
+      spec.uStart + spec.uWidth * 0.5,
+      (spec.rowY ?? spec.row) + (spec.rowSpan ?? 1) * 0.5,
+    );
+    const root = this.getTailRoot();
+    if (target.x < root.x - 18 || Math.hypot(target.x - root.x, target.y - root.y) > 132) return null;
+
+    this.lastTailStrikeAt = now;
+    this.tailStrike = { keyId: spec.id, target, startedAt: now, reach: 0, pressure: 0 };
+    return this.tailStrike;
+  }
+
+  private updateTailStrike(now: number): void {
+    const strike = this.tailStrike;
+    if (!strike) return;
+
+    const age = now - strike.startedAt;
+    const releaseAt = TAIL_REACH_TIME + TAIL_CONTACT_TIME;
+    if (age >= releaseAt + TAIL_RETURN_TIME) {
+      this.tailStrike = null;
+      return;
+    }
+
+    const extension = Math.min(1, age / TAIL_REACH_TIME, 1 - (age - releaseAt) / TAIL_RETURN_TIME);
+    strike.reach = extension * extension * (3 - 2 * extension);
+    strike.pressure = age >= TAIL_REACH_TIME && age < releaseAt
+      ? 1 - Math.abs((age - TAIL_REACH_TIME) / TAIL_CONTACT_TIME * 2 - 1)
+      : 0;
   }
 
   public onKeyUp(vk: number): void {
+    this.lastInteractionAt = performance.now();
     const spec = resolveKeyByVk(vk, this.keyboardLayout);
     if (!spec) return;
     const anim = this.keyAnims.get(spec.id);
     if (anim) anim.pressed = false;
   }
 
-  public onGlobalMouseMove(nx: number, ny: number): void {
+  public onGlobalMouseMove(nx: number, ny: number, x = nx * this.logicalW, y = ny * this.logicalH): boolean {
+    const anchor = this.mouseMotionAnchor;
+    // Keep the last accepted position so slow movements still add up.
+    if (anchor && Math.max(Math.abs(x - anchor.x), Math.abs(y - anchor.y)) <= 1) return false;
+    this.mouseMotionAnchor = { x, y };
     const now = performance.now();
+    this.lastInteractionAt = now;
     this.mouseTargetOffsetX = (nx - 0.5) * 28;
     this.mouseTargetOffsetY = (ny - 0.5) * 20;
-    this.lastMouseMoveAt = now;
+    this.lastMouseActivityAt = now;
+    this.lastMouseMotionAt = now;
 
     this.leftPaw.mode = 'mouse';
-    this.leftPaw.lastActiveAt = now;
+    return true;
   }
 
   private getMouseButtonColors(): { left: string; right: string; middle: string } {
@@ -546,6 +699,7 @@ export class KuroCatEngine {
 
   public onMouseDown(button: string): void {
     const now = performance.now();
+    this.lastInteractionAt = now;
     if (button === 'left') {
       this.mouseLeftDown = true;
       this.mouseLeftPress = 1;
@@ -560,24 +714,25 @@ export class KuroCatEngine {
       this.spawnMouseBadge('middle', now);
     }
 
-    this.lastMouseMoveAt = now;
+    this.lastMouseActivityAt = now;
     this.leftPaw.mode = 'mouse';
     this.leftPaw.impactSquash = 0.72;
-    this.leftPaw.lastActiveAt = now;
   }
 
   public onMouseUp(button: string): void {
     if (button === 'left') this.mouseLeftDown = false;
     else if (button === 'right') this.mouseRightDown = false;
     else if (button === 'middle') this.mouseMiddleDown = false;
+    else return;
+    this.lastInteractionAt = this.lastMouseActivityAt = performance.now();
   }
 
   public onMouseWheel(): void {
     const now = performance.now();
+    this.lastInteractionAt = now;
     this.mouseScrollFlash = 1;
-    this.lastMouseMoveAt = now;
+    this.lastMouseActivityAt = now;
     this.leftPaw.mode = 'mouse';
-    this.leftPaw.lastActiveAt = now;
   }
 
   public onWindowCursor(relX: number, relY: number, overCat: boolean): void {
@@ -711,8 +866,22 @@ export class KuroCatEngine {
 
   // ---- Simulation update ----
 
+  private canSleep(now: number): boolean {
+    if (now - this.lastInteractionAt < AUTO_SLEEP_DELAY ||
+        this.mouseLeftDown || this.mouseRightDown || this.mouseMiddleDown) return false;
+    for (const key of this.keyAnims.values()) {
+      if (key.pressed) return false;
+    }
+    return true;
+  }
+
   private update(dt: number, now: number): void {
     this.elapsed += dt;
+    if (this.canSleep(now)) this.sleepStartedAt ??= now;
+    else this.sleepStartedAt = null;
+    const shouldDoze = this.sleepStartedAt !== null && !this.petPainter;
+    const sleepEase = 1 - Math.exp(-(shouldDoze ? 4 : 14) * dt);
+    this.sleepDepth += (Number(shouldDoze) - this.sleepDepth) * sleepEase;
 
     const mLerp = 1 - Math.exp(-28 * dt);
     this.mouseOffsetX += (this.mouseTargetOffsetX - this.mouseOffsetX) * mLerp;
@@ -729,9 +898,8 @@ export class KuroCatEngine {
     this.mouseScrollFlash = Math.max(0, this.mouseScrollFlash - dt * 4.5);
     this.mouseBadges = this.mouseBadges.filter((b) => now - b.createdAt < b.lifetime);
 
-    while (this.recentKeyTimes.length > 0 && now - this.recentKeyTimes[0] > 950) {
-      this.recentKeyTimes.shift();
-    }
+    this.updateTypingSpeed(now);
+    this.updateTailStrike(now);
     const targetTypingEnergy = Math.min(1, this.recentKeyTimes.length / 7);
     this.typingEnergy += (targetTypingEnergy - this.typingEnergy) * (1 - Math.exp(-9 * dt));
 
@@ -810,7 +978,7 @@ export class KuroCatEngine {
       dx = (dx / dist) * mag;
       dy = (dy / dist) * mag;
     }
-    const mouseRecentlyMoved = now - this.lastMouseMoveAt < 2400;
+    const mouseRecentlyMoved = now - this.lastMouseActivityAt < 2400;
     const pureTypingGlance = mouseRecentlyMoved ? 0 : this.typingHunch;
     const targetEyeX =
       dx * 7.0 * (1 - pureTypingGlance * 0.45) +
@@ -820,7 +988,7 @@ export class KuroCatEngine {
     this.eyeLookX += (targetEyeX - this.eyeLookX) * eyeLerp;
     this.eyeLookY += (targetEyeY - this.eyeLookY) * eyeLerp;
 
-    const targetFaceTurn = dx * 4.0 + this.spineLean * 8.0 + this.typingSway * 8.5 + pureTypingGlance * 1.5;
+    const targetFaceTurn = (dx * 4.0 + this.spineLean * 8.0 + this.typingSway * 8.5 + pureTypingGlance * 1.5) * (1 - this.sleepDepth);
     this.faceTurnX += (targetFaceTurn - this.faceTurnX) * (1 - Math.exp(-11 * dt));
 
     for (const anim of this.keyAnims.values()) {
@@ -866,18 +1034,18 @@ export class KuroCatEngine {
           y: liveMouseY + 10.0 - anyClickPress * 3.4,
         };
       }
-      const stillHolding =
-        this.mouseLeftDown ||
-        this.mouseRightDown ||
-        this.mouseMiddleDown ||
-        now - this.lastMouseMoveAt < 2200;
+      const typingRecently = now - this.lastAnyKeyAt < 650;
+      const stillHolding = this.isMouseActive(now) ||
+        (!typingRecently && now - this.lastMouseActivityAt < 2200);
       if (!stillHolding) {
-        paw.mode = 'idle';
+        paw.mode = typingRecently ? 'curled' : 'idle';
       }
     } else if (paw.mode === 'poke') {
       paw.pokeTime += dt;
-      if (paw.pokeTime > 0.13) {
-        if (paw.side === 'left' && (this.mouseLeftDown || this.mouseRightDown || now - this.lastMouseMoveAt < 450)) {
+      const activelyMousing = this.isMouseActive(now);
+      const strokeDuration = this.fastTyping && !activelyMousing ? 0.17 : 0.13;
+      if (paw.pokeTime > strokeDuration) {
+        if (paw.side === 'left' && activelyMousing) {
           paw.mode = 'mouse';
         } else if (now - this.lastAnyKeyAt < 650) {
           paw.mode = 'curled';
@@ -961,15 +1129,22 @@ export class KuroCatEngine {
       ctx.scale(uniformScale, uniformScale);
     }
 
+    if (this.petPainter) {
+      this.petPainter(ctx, this.lastTime, this.sleepStartedAt !== null);
+      ctx.restore();
+      return;
+    }
+
     const breath = Math.sin(this.elapsed * 2.1) * 1.0;
     const purrShift = this.squintAmount > 0.4 ? Math.sin(this.elapsed * 22) * 0.45 * this.squintAmount : 0;
 
-    // Layer 1: Thick plush calm low-right S-hook black tail (measured 17px thick, barely drifts!)
-    this.drawTail(ctx);
+    if (!this.tailStrike) this.drawTail(ctx);
 
     // Layer 2: Mini mouse & 65% mechanical keyboard
     this.drawMiniMouse(ctx);
     this.drawKeyboard(ctx);
+    // A reaching tail crosses in front of the keyboard and behind the cat.
+    if (this.tailStrike) this.drawTail(ctx);
 
     // Layer 3: Exact measured spine-deformable cat silhouette (ears, cheeks, neck, pear belly, grounded hind feet, eyes & tiny whiskers)
     this.drawCatBody(ctx, breath, purrShift);
@@ -977,6 +1152,11 @@ export class KuroCatEngine {
     // Layer 4: True-scale velvety cat paws (tapered idle legs / planted diagonal mouse support leg / bent curled chest paw / plump round poking paw!)
     this.drawPaw(ctx, this.leftPaw, breath);
     this.drawPaw(ctx, this.rightPaw, breath);
+
+    if (this.sleepStartedAt !== null && this.sleepDepth > .85) {
+      const head = this.spinePoint(.1, breath);
+      drawSleepIndicator(ctx, head.x + 57, head.y + 1, this.lastTime - this.sleepStartedAt);
+    }
 
     // Layer 5: Organic bouncing 3D keycap bubbles & crisp mouse click badges
     if (this.showKeyBubbles) {
@@ -990,16 +1170,25 @@ export class KuroCatEngine {
   private drawTail(ctx: CanvasRenderingContext2D): void {
     // Exact ORIG 0.3s tail: leaves hip slightly higher, flat horizontal start curving cleanly up into a soft horizontal S-hook!
     const gentleDrift = Math.sin(this.elapsed * 0.9) * 1.4;
-    const hipRight = this.spinePoint(0.84, 0);
+    const { x: startX, y: startY } = this.getTailRoot();
+    let cp1X = startX + 34;
+    let cp1Y = startY + 4 + gentleDrift * 0.25;
+    let cp2X = startX + 38;
+    let cp2Y = startY - 34 + gentleDrift * 0.45;
+    let endX = startX + 70 + gentleDrift * 0.35;
+    let endY = startY - 35 + gentleDrift;
 
-    const startX = hipRight.x + 56;
-    const startY = hipRight.y - 2;
-    const cp1X = startX + 34;
-    const cp1Y = startY + 4 + gentleDrift * 0.25;
-    const cp2X = startX + 38;
-    const cp2Y = startY - 34 + gentleDrift * 0.45;
-    const endX = startX + 70 + gentleDrift * 0.35;
-    const endY = startY - 35 + gentleDrift;
+    const strike = this.tailStrike;
+    if (strike) {
+      const { target, reach } = strike;
+      const targetY = target.y + this.kbBounce * 1.1;
+      cp1X += 18 * reach;
+      cp1Y += (startY + 12 - cp1Y) * reach;
+      cp2X += (target.x + 30 - cp2X) * reach;
+      cp2Y += (targetY - 34 - cp2Y) * reach;
+      endX += (target.x - endX) * reach;
+      endY += (targetY - endY) * reach;
+    }
 
     ctx.save();
     ctx.lineCap = 'round';
@@ -1507,7 +1696,7 @@ export class KuroCatEngine {
   private drawEyes(ctx: CanvasRenderingContext2D, cx: number, eyeY: number): void {
     const isRagdoll = this.catBreed === 'ragdoll';
     const blinkVal = this.isBlinking ? 1 - Math.abs(this.blinkProgress - 1) : 0;
-    const closedness = Math.max(blinkVal, this.squintAmount * 0.85);
+    const closedness = Math.max(blinkVal, this.squintAmount * 0.85, this.sleepDepth);
 
     // Exact measured eye spacing & size from original 0.3s & 10.6s!
     const eyeXs = [cx - 23.0, cx + 23.0];
@@ -1519,7 +1708,7 @@ export class KuroCatEngine {
       ctx.save();
       ctx.translate(ex, eyeY);
 
-      if (this.squintAmount > 0.38 && blinkVal < 0.3) {
+      if (this.sleepDepth > .87 || (this.squintAmount > 0.38 && blinkVal < 0.3)) {
         if (isRagdoll) {
           // Sleek lazy drooping slits with a subtle crystal-blue underside shimmer!
           ctx.strokeStyle = 'rgba(174, 224, 255, 0.72)';
@@ -1800,7 +1989,8 @@ export class KuroCatEngine {
 
     for (const key of layout.keys) {
       const anim = this.keyAnims.get(key.id);
-      const press = anim ? anim.pressAmount : 0;
+      const tailPressure = this.tailStrike?.keyId === key.id ? this.tailStrike.pressure : 0;
+      const press = Math.max(anim?.pressAmount ?? 0, tailPressure * 0.7);
 
       const rY = key.rowY ?? key.row;
       const rSpan = key.rowSpan ?? 1;
@@ -1816,7 +2006,7 @@ export class KuroCatEngine {
       const rawW = key.uWidth * unitW - gap;
       const x = rawX * depthScale;
       const w = rawW * depthScale;
-      const y = -innerH / 2 + screenRowTop * rowH + gap * 0.5 + press * 2.0;
+      const y = -innerH / 2 + screenRowTop * rowH + gap * 0.5 + press * 2.0 + tailPressure * 1.1;
       const h = rSpan * rowH - gap - 0.8;
 
       let topColor = '#f8f8f5';
@@ -2832,7 +3022,7 @@ export class KuroCatEngine {
 
   private drawCustomEyes(ctx: CanvasRenderingContext2D, s: ResolvedSkin, cx: number, eyeY: number): void {
     const blinkVal = this.isBlinking ? 1 - Math.abs(this.blinkProgress - 1) : 0;
-    const closedness = Math.max(blinkVal, this.squintAmount * 0.85);
+    const closedness = Math.max(blinkVal, this.squintAmount * 0.85, this.sleepDepth);
     const eyeXs = [cx - 23.0, cx + 23.0];
     const rx = 14.8 + this.typingHunch * 1.0;
     const ry = 13.4 - this.typingHunch * 0.5;
@@ -2841,7 +3031,7 @@ export class KuroCatEngine {
       ctx.save();
       ctx.translate(eyeXs[idx], eyeY);
 
-      if (this.squintAmount > 0.38 && blinkVal < 0.3) {
+      if (this.sleepDepth > .87 || (this.squintAmount > 0.38 && blinkVal < 0.3)) {
         if (s.squintGlowColor) {
           ctx.strokeStyle = s.squintGlowColor;
           ctx.lineWidth = 4.4;

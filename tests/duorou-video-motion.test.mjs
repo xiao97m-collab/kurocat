@@ -1,0 +1,116 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { test } from 'node:test';
+import { createDualPaws } from '../src/pets/duorou/dual-paws.js';
+import { createHeldLook, createIdleActions, createMouseClickMotion, createRestMotion } from '../src/pets/duorou/video-motion.js';
+
+function asset(name) {
+  return JSON.parse(readFileSync(new URL(`../src/pets/duorou/assets/${name}.json`, import.meta.url)));
+}
+
+test('idle actions wait for the resting pose and alternate after ten quiet seconds', () => {
+  const actions = createIdleActions([{ frames: [0, 1, 2], fps: 20 }, { frames: [0, 1], fps: 20 }]);
+
+  assert.equal(actions.step(9999, 0, true, true), null);
+  assert.deepEqual(actions.step(10000, 0, true, false), { clip: 0, frame: null });
+  assert.deepEqual(actions.step(10100, 0, true, true), { clip: 0, frame: 0 });
+  assert.deepEqual(actions.step(10150, 0, true, true), { clip: 0, frame: 1 });
+  assert.deepEqual(actions.step(10200, 0, true, true), { clip: 0, frame: 2 });
+  assert.equal(actions.step(10250, 0, true, true), null);
+  assert.equal(actions.step(20249, 0, true, true), null);
+  assert.deepEqual(actions.step(20250, 0, true, true), { clip: 1, frame: 0 });
+  assert.equal(actions.step(20280, 20280, false, true), null);
+  assert.equal(actions.step(30279, 20280, true, true), null);
+  assert.deepEqual(actions.step(30280, 20280, true, true), { clip: 0, frame: 0 });
+  assert.equal(actions.step(30300, 30300, true, true), null);
+});
+
+test('sleep lets the current idle action finish and defers the next action until after waking', () => {
+  const actions = createIdleActions([{ frames: [0, 1, 2], fps: 10 }, { frames: [0], fps: 10 }]);
+  assert.deepEqual(actions.step(10_000, 0, true, true), { clip: 0, frame: 0 });
+  assert.deepEqual(actions.step(10_100, 0, true, false, false), { clip: 0, frame: 1 });
+  assert.equal(actions.step(10_300, 0, true, false, false), null);
+  assert.equal(actions.step(30_000, 0, true, true, false), null);
+  assert.equal(actions.step(31_000, 31_000, true, true), null);
+  assert.deepEqual(actions.step(41_000, 31_000, true, true), { clip: 1, frame: 0 });
+});
+
+test('each rapid click presses the paw before it settles', () => {
+  const motion = createMouseClickMotion();
+  let previous = motion.step(0);
+  for (let click = 0; click < 14; click += 1) {
+    motion.press();
+    const response = motion.step(16);
+    assert.ok(response > previous + .3);
+    previous = motion.step(64);
+    assert.ok(previous < response);
+  }
+  const settled = motion.step(600);
+  assert.ok(settled < .001);
+});
+
+test('the recorded idle, hover and wake states use the intended source frames', () => {
+  const { rest } = asset('video-scenes');
+  const pose = createRestMotion(rest);
+  const replay = (intent, count) => Array.from({ length: count }, () => pose.step(1000 / 60, intent));
+  const idle = replay('idle', 120);
+  assert.ok(idle.some(frame => rest.breathe.includes(frame)));
+  assert.ok(idle.every(frame => !rest.closed.includes(frame)));
+  const hover = replay('hover', 130);
+  assert.ok(hover.some(frame => rest.close.includes(frame)));
+  assert.ok(hover.slice(-30).every(frame => rest.closed.includes(frame)));
+  const wake = replay(null, 65);
+  assert.ok(wake.some(frame => rest.open.includes(frame)));
+  assert.equal(wake.at(-1), 0);
+  assert.ok([...idle, ...hover, ...wake].every(frame => rest.frames.includes(frame)));
+});
+
+test('sleep closes the eyes and resumes the recorded wake motion when input returns', () => {
+  const { rest } = asset('video-scenes');
+  const pose = createRestMotion(rest);
+  const sleep = Array.from({ length: 85 }, () => pose.step(34, 'sleep'));
+  assert.ok(sleep.slice(-20).every(frame => rest.closed.includes(frame)));
+  const wake = Array.from({ length: 35 }, () => pose.step(18, null));
+  assert.ok(wake.some(frame => rest.open.includes(frame)));
+  assert.equal(wake.at(-1), 0);
+});
+
+test('held gaze follows the recorded low arc through a centered nod without crossing the upright frames', () => {
+  const { held } = asset('video-scenes');
+  const pose = createHeldLook(held);
+  const aim = (x, y) => Array.from({ length: 70 }, () => pose.step(1000 / 60, x, y));
+  const right = aim(.71, .62).at(-1);
+  const center = aim(0, 1);
+  const left = aim(-.65, .83);
+  assert.ok(Math.abs(right - 65) <= 2);
+  assert.ok(Math.abs(center.at(-1) - 83) <= 2);
+  assert.ok(Math.abs(left.at(-1) - 101) <= 2);
+  const lowerArc = [right, ...center, ...left];
+  assert.ok(lowerArc.slice(1).every((frame, i) => frame >= lowerArc[i] && frame - lowerArc[i] <= 3));
+  aim(0, 0);
+  assert.equal(pose.centered(), true);
+});
+
+test('every supported simultaneous key lands on its actual cap with the right paw', () => {
+  const data = { ...asset('frames').dualPaws, ...asset('held-paws') };
+  const oldDocument = globalThis.document;
+  globalThis.document = { createElement: () => ({ getContext: () => ({}) }) };
+  const paws = createDualPaws([], {}, {}, data, 420, 440);
+  globalThis.document = oldDocument;
+  assert.ok(Object.keys(data.clips).length >= 30);
+  assert.equal(paws.supports('bs'), false);
+  for (const [key, clip] of Object.entries(data.clips)) {
+    assert.equal(clip.hand, 'right');
+    assert.ok(clip.poses.at(-1).front, key);
+    const [x, y] = clip.tip;
+    const edges = clip.polygon.map(([a, b], i) => {
+      const [c, d] = clip.polygon[(i + 1) % clip.polygon.length];
+      return (c - a) * (y - b) - (d - b) * (x - a);
+    });
+    assert.ok(edges.every(edge => edge >= 0) || edges.every(edge => edge <= 0), key);
+    const contact = [];
+    paws.push(key);
+    for (let f = 0; f < 22; ++f) paws.step(34, (id, hand) => contact.push([id, hand]), true);
+    assert.deepEqual(contact, [[key, 'right']]);
+  }
+});

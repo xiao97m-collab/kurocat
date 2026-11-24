@@ -189,7 +189,7 @@ export function resolveCustomSkin(raw: CatSkinConfig): ResolvedSkin {
 export const DEFAULT_BUILTIN_CATS: CatSkinConfig[] = [
   {
     id: 'black',
-    name: '小黑猫',
+    name: '经典小黑猫',
     emoji: '🐈‍⬛',
     builtin: true,
     furColor: '#141314',
@@ -198,13 +198,12 @@ export const DEFAULT_BUILTIN_CATS: CatSkinConfig[] = [
     accentSideColor: '#8cb014',
   },
   {
-    id: 'ragdoll',
-    name: '布偶猫',
-    emoji: '🐱',
+    id: 'duorou',
+    name: '多肉（萨摩耶）',
+    emoji: '🐶',
     builtin: true,
-    furColor: '#fbf9f3',
-    eyeColorTop: '#2c5594',
-    accentColor: '#7ac7ff',
-    accentSideColor: '#4690d8',
+    furColor: '#f4efe6',
+    eyeColorTop: '#29221c',
+    accentColor: '#e6cea6',
   },
 ];
