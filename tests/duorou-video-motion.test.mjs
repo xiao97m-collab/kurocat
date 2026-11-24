@@ -2,11 +2,28 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { createDualPaws } from '../src/pets/duorou/dual-paws.js';
-import { createHeldLook, createIdleActions, createMouseClickMotion, createRestMotion } from '../src/pets/duorou/video-motion.js';
+import { createHeldLook, createIdleActions, createMouseClickMotion, createRestMotion, createVideoAtlas } from '../src/pets/duorou/video-motion.js';
 
 function asset(name) {
   return JSON.parse(readFileSync(new URL(`../src/pets/duorou/assets/${name}.json`, import.meta.url)));
 }
+
+test('idle clip alignment eases off at the shared resting pose without moving the atlas crop', () => {
+  const page = {};
+  const atlas = createVideoAtlas([page], {
+    columns: 7, rows: 1, cell: [100, 200], origin: [8, 16], size: [40, 80],
+    frames: [0, 1, 2, 3, 4, 5, 6],
+    alignment: { start: 2, end: 4, scale: [.9, 1.1], shift: [2, -7] },
+  });
+  const calls = [];
+  const ctx = { drawImage: (...args) => calls.push(args) };
+  for (const frame of [0, 1, 3, 6]) atlas.draw(ctx, frame);
+  assert.deepEqual(calls.map(args => args.slice(0, 5)), [0, 1, 3, 6].map(i => [page, 100 * i, 0, 100, 200]));
+  assert.deepEqual(calls[0].slice(5), [8, 16, 40, 80]);
+  assert.deepEqual(calls[3].slice(5), calls[0].slice(5));
+  assert.deepEqual(calls[1].slice(5).map(n => +n.toFixed(3)), [8.6, 13.3, 38, 84]);
+  assert.deepEqual(calls[2].slice(5).map(n => +n.toFixed(3)), [9.2, 10.6, 36, 88]);
+});
 
 test('idle actions wait for the resting pose and alternate after ten quiet seconds', () => {
   const actions = createIdleActions([{ frames: [0, 1, 2], fps: 20 }, { frames: [0, 1], fps: 20 }]);

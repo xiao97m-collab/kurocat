@@ -522,6 +522,7 @@ export class KeyboardAndMouse3D {
 
   // Cordless 3D KuroCat Mini Mouse
   private readonly mouseShape = new THREE.Group();
+  private readonly mouseShell: readonly THREE.Mesh[];
   private readonly mouseBodyMat: THREE.MeshBasicMaterial;
   private readonly leftBtnMat: THREE.MeshBasicMaterial;
   private readonly rightBtnMat: THREE.MeshBasicMaterial;
@@ -571,7 +572,6 @@ export class KeyboardAndMouse3D {
 
     // Build Cordless KuroCat Oval Split-Plate Mini Mouse
     this.mouseGroup.position.copy(this.mouseHome);
-    this.mouseShape.rotation.y = -0.10;
     this.mouseGroup.add(this.mouseShape);
 
     const MW = 0.165;
@@ -611,6 +611,7 @@ export class KeyboardAndMouse3D {
     const dome = new THREE.Mesh(domeGeo, this.mouseBodyMat);
     dome.scale.set(MW, MH, ML);
     dome.position.y = 0.012;
+    this.mouseShell = [baseSkirt, dome];
 
     const onTop = (x: number, z: number) =>
       0.012 +
@@ -771,7 +772,7 @@ export class KeyboardAndMouse3D {
     const isCatFacing = orientation === 'cat';
 
     // Sync mouse orientation (180° cat-facing vs 0° viewer-facing)
-    this.mouseShape.rotation.y = isCatFacing ? -0.10 : Math.PI - 0.10;
+    this.mouseShape.rotation.y = isCatFacing ? 0 : Math.PI;
     this.mouseLabelLMat.map = makeMouseLabelTexture('L', isCatFacing);
     this.mouseLabelRMat.map = makeMouseLabelTexture('R', isCatFacing);
     this.mouseLabelLMat.needsUpdate = true;
@@ -787,6 +788,7 @@ export class KeyboardAndMouse3D {
 
     this.boardGroup.position.set(0.24, 0.015, 1.08);
     this.mouseHome.set(is108 ? -1.46 : -1.16, 0.015, 0.96);
+    this.mouseGroup.position.copy(this.mouseHome).add(this.mouseOffset);
 
     // Soft grounded desk shadow under keyboard
     const kbShadowGeo = new THREE.PlaneGeometry(W * 1.18, D * 1.38);
@@ -924,6 +926,31 @@ export class KeyboardAndMouse3D {
 
   public getBoardWidth(): number {
     return this.boardWidth;
+  }
+
+  public keyGrid(): { center: THREE.Vector3; width: number; length: number } {
+    const layout = getKeyboardLayout(this.layoutId);
+    const unit = this.layoutId === '108' ? 0.122 : 0.15;
+    return {
+      center: this.boardGroup.localToWorld(new THREE.Vector3(0, this.boardH + 0.008 + this.capH, 0)),
+      width: layout.totalUnits * unit,
+      length: layout.totalRows * unit,
+    };
+  }
+
+  public mouseShellBounds(camera: THREE.Camera): THREE.Box2 {
+    const bounds = new THREE.Box2().makeEmpty();
+    const point = new THREE.Vector3();
+    const screen = new THREE.Vector2();
+    for (const mesh of this.mouseShell) {
+      mesh.updateWorldMatrix(true, false);
+      const vertices = mesh.geometry.getAttribute('position');
+      for (let i = 0; i < vertices.count; i++) {
+        point.fromBufferAttribute(vertices, i).applyMatrix4(mesh.matrixWorld).project(camera);
+        bounds.expandByPoint(screen.set(point.x, point.y));
+      }
+    }
+    return bounds;
   }
 
   public resolveKey(vk: number): KeyEntry3D | null {

@@ -7,7 +7,7 @@ import { catAudio } from './audio';
 import { DEFAULT_BUILTIN_CATS, type CatSkinConfig } from './catSkins';
 import type { KeyboardLayoutId } from './keyboardLayout';
 import type { loadDuorou } from './pets/duorou';
-import type { DuorouEquipment3D } from './pets/duorou/equipment3d';
+import type { PetEquipment3D } from './pets/duorou/equipment3d';
 
 const duorouId = 'duorou';
 
@@ -95,7 +95,7 @@ const canvas = document.getElementById('pet-canvas') as HTMLCanvasElement;
 const menuEl = document.getElementById('context-menu') as HTMLDivElement;
 const breedPillsEl = document.getElementById('breed-pills') as HTMLDivElement;
 const keyboardLayoutEl = document.getElementById('keyboard-layout-options') as HTMLDivElement;
-const duorouEquipmentEl = document.getElementById('duorou-equipment-options') as HTMLDivElement;
+const equipmentEl = document.getElementById('pet-equipment-options') as HTMLDivElement;
 const scaleSliderEl = document.getElementById('scale-slider') as HTMLInputElement;
 const scaleValueEl = document.getElementById('scale-value') as HTMLButtonElement;
 const updateToastEl = document.getElementById('update-toast') as HTMLDivElement;
@@ -108,32 +108,31 @@ type Duorou = Awaited<ReturnType<typeof loadDuorou>>;
 let duorou: Duorou | null = null;
 let duorouLoad: Promise<Duorou> | null = null;
 let activeDuorou: Duorou | null = null;
-let duorouEquipment: DuorouEquipment3D | null = null;
-let duorouEquipmentLoad: Promise<void> | null = null;
+let equipment3d: PetEquipment3D | null = null;
+let equipmentLoad: Promise<void> | null = null;
 
-function syncDuorouEquipment(): void {
-  const enabled = settings.catBreed === duorouId && settings.duorouEquipment3d && activeDuorou !== null;
-  engine.setPetEquipment3d(enabled ? duorouEquipment : null);
-  if (!enabled || duorouEquipment || duorouEquipmentLoad) return;
+function syncPetEquipment(): void {
+  const enabled = settings.duorouEquipment3d;
+  engine.setPetEquipment3d(enabled ? equipment3d : null);
+  if (!enabled || equipment3d || equipmentLoad) return;
 
-  duorouEquipmentLoad = import('./pets/duorou/equipment3d').then(({ DuorouEquipment3D }) => {
-    if (settings.catBreed !== duorouId || !settings.duorouEquipment3d || !activeDuorou) return;
-    duorouEquipment = new DuorouEquipment3D();
-    engine.setPetEquipment3d(duorouEquipment);
+  equipmentLoad = import('./pets/duorou/equipment3d').then(({ PetEquipment3D }) => {
+    if (!settings.duorouEquipment3d) return;
+    equipment3d = new PetEquipment3D();
+    engine.setPetEquipment3d(equipment3d);
   }).catch(error => {
-    console.error('Failed to load Duorou 3D equipment:', error);
-    if (settings.catBreed === duorouId && settings.duorouEquipment3d) {
+    console.error('Failed to load 3D equipment:', error);
+    if (settings.duorouEquipment3d) {
       showUpdateToast('3D 键鼠不可用，已切回 2D', { autoHideMs: 4200 });
       void applySettingsPatch({ duorouEquipment3d: false });
     }
-  }).finally(() => { duorouEquipmentLoad = null; });
+  }).finally(() => { equipmentLoad = null; });
 }
 
 function selectDuorou(selected: boolean): void {
   if (!selected) {
     activeDuorou = null;
     engine.setPetPainter(null);
-    syncDuorouEquipment();
     return;
   }
   if (duorou) {
@@ -142,7 +141,6 @@ function selectDuorou(selected: boolean): void {
       activeDuorou = duorou;
       engine.setPetPainter(duorou.draw);
     }
-    syncDuorouEquipment();
     return;
   }
   if (duorouLoad) return;
@@ -207,9 +205,8 @@ function syncMenuUI(): void {
   const kbLayout: KeyboardLayoutId = !isDuorou && settings.keyboardLayout === '108' ? '108' : '65';
   const kbOrient: KeyboardOrientation = !isDuorou && settings.keyboardOrientation === 'viewer' ? 'viewer' : 'cat';
   keyboardLayoutEl.hidden = isDuorou;
-  duorouEquipmentEl.hidden = !isDuorou;
-  duorouEquipmentEl.querySelectorAll<HTMLButtonElement>('[data-duorou-equipment]').forEach((btn) => {
-    const active = (btn.dataset.duorouEquipment === '3d') === Boolean(settings.duorouEquipment3d);
+  equipmentEl.querySelectorAll<HTMLButtonElement>('[data-pet-equipment]').forEach((btn) => {
+    const active = (btn.dataset.petEquipment === '3d') === Boolean(settings.duorouEquipment3d);
     btn.classList.toggle('active', active);
     btn.setAttribute('aria-pressed', String(active));
   });
@@ -236,6 +233,7 @@ function syncMenuUI(): void {
   engine.setCatAppearance(isDuorou ? 'black' : activeCat?.id || 'black', isDuorou ? null : activeCat);
   engine.setKeyboardConfig(kbLayout, kbOrient);
   selectDuorou(isDuorou);
+  syncPetEquipment();
   if (!sliderDragging) {
     engine.setRenderScale(settings.scale);
   }
@@ -622,12 +620,12 @@ async function bootstrap(): Promise<void> {
 
   menuEl.addEventListener('click', (e) => {
     const target = (e.target as HTMLElement).closest<HTMLElement>(
-      '[data-action], [data-scale], [data-breed], [data-kblayout], [data-kborient], [data-duorou-equipment]',
+      '[data-action], [data-scale], [data-breed], [data-kblayout], [data-kborient], [data-pet-equipment]',
     );
     if (!target) return;
 
-    const equipment = target.dataset.duorouEquipment;
-    if (settings.catBreed === duorouId && (equipment === '2d' || equipment === '3d')) {
+    const equipment = target.dataset.petEquipment;
+    if (equipment === '2d' || equipment === '3d') {
       void applySettingsPatch({ duorouEquipment3d: equipment === '3d' });
       closeContextMenu();
       return;

@@ -1,27 +1,24 @@
-import { OrthographicCamera, Scene, WebGLRenderer } from 'three';
+import { type Camera, OrthographicCamera, PerspectiveCamera, Scene, Vector2, Vector3, WebGLRenderer } from 'three';
+import type { KeyboardLayoutId } from '../../keyboardLayout';
+import type { KeyboardOrientation } from '../../catEngine';
 import { KeyboardAndMouse3D } from './keyboard3d';
 
-const renderWidth = 310;
-const renderHeight = 116;
+const renderWidth = 472;
+const renderHeight = 168;
 const pixelsPerUnit = 112;
 const pixelRatio = 2;
+const vertical = 4.7 / Math.hypot(4.7, 4.3);
+const horizontal = 4.3 / Math.hypot(4.7, 4.3);
 
-function createLayer(width: number, height: number, x: number, y: number, z: number) {
-  const halfWidth = renderWidth / (2 * pixelsPerUnit);
-  const halfHeight = renderHeight / (2 * pixelsPerUnit);
-  const camera = new OrthographicCamera(-halfWidth, halfWidth, halfHeight, -halfHeight, 0.1, 20);
-  camera.position.set(x, y + 4.7, z + 4.3);
-  camera.lookAt(x, y, z);
-  camera.updateMatrixWorld();
-
+function createLayer<C extends Camera>(camera: C, width: number, height: number) {
   const image = document.createElement('canvas');
   image.width = width * pixelRatio;
   image.height = height * pixelRatio;
   return { camera, image, ctx: image.getContext('2d')!, width, height };
 }
 
-/** Draw the original 3D models into the existing body → equipment → paw layers. */
-export class DuorouEquipment3D {
+/** Draw the 3D equipment in the same canvas coordinates as the 2D paw targets. */
+export class PetEquipment3D {
   private readonly scene = new Scene();
   private readonly renderer = new WebGLRenderer({
     alpha: true,
@@ -29,11 +26,22 @@ export class DuorouEquipment3D {
     powerPreference: 'low-power',
   });
   private readonly desk = new KeyboardAndMouse3D(this.scene);
-  private readonly keyboard = createLayer(renderWidth, renderHeight, 0.24, 0.191, 1.08);
-  private readonly mouse = createLayer(76, 76, -1.16, 0.077, 0.96);
+  private readonly keyboard = createLayer(new PerspectiveCamera(), renderWidth, renderHeight);
+  private readonly mouse = createLayer(
+    new OrthographicCamera(-renderWidth / (2 * pixelsPerUnit), renderWidth / (2 * pixelsPerUnit),
+      renderHeight / (2 * pixelsPerUnit), -renderHeight / (2 * pixelsPerUnit), 0.1, 20),
+    90, 94,
+  );
+  private gridWidth = 0;
+  private gridHeight = 0;
+  private keyboardOffsetY = 0;
+  private mouseScaleX = 1;
+  private mouseScaleY = 1;
+  private mouseOffsetX = 0;
+  private mouseOffsetY = 0;
   private lastTime: number | null = null;
-  private keyboardAnimation = 0.02;
-  private mouseAnimation = 0.02;
+  private keyboardAnimation = 0;
+  private mouseAnimation = 0;
   private leftDown = false;
   private rightDown = false;
   private scrollFlash = 0;
@@ -42,7 +50,7 @@ export class DuorouEquipment3D {
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.setPixelRatio(pixelRatio);
     this.renderer.setSize(renderWidth, renderHeight, false);
-    // The Canvas transform already applies the tilt used by 多肉's paw atlas.
+    // The pet canvas already provides the keyboard's in-plane rotation.
     this.desk.boardGroup.rotation.set(0, 0, 0);
   }
 
@@ -50,13 +58,59 @@ export class DuorouEquipment3D {
     return !this.renderer.getContext().isContextLost();
   }
 
-  update(now: number, keys: ReadonlyMap<string, { pressAmount: number }>, left: boolean, right: boolean, scroll: number): void {
-    const dt = this.lastTime === null ? 1 / 60 : Math.min(0.034, (now - this.lastTime) / 1000);
+  configure(layout: KeyboardLayoutId, orientation: KeyboardOrientation, gridWidth: number, gridHeight: number,
+    backScale: number, taper: number, mouseWidth: number, mouseHeight: number): void {
+    if (this.gridWidth === gridWidth && this.gridHeight === gridHeight &&
+        this.desk.getLayoutId() === layout && this.desk.getOrientation() === orientation) return;
+
+    this.gridWidth = gridWidth;
+    this.gridHeight = gridHeight;
+    this.desk.rebuildBoard(layout, orientation);
+
+    const grid = this.desk.keyGrid();
+    const camera = this.keyboard.camera;
+    // Match the 2D key-top plane's top-to-bottom widening.
+    const middleScale = backScale + taper / 2;
+    const halfSpread = taper / (2 * middleScale);
+    const distance = horizontal * grid.length / (2 * halfSpread);
+    const fitX = gridWidth * middleScale / grid.width;
+    const fitY = gridHeight * (1 - halfSpread ** 2) / (grid.length * vertical);
+    const focal = 2 * fitY * distance / renderHeight;
+    camera.fov = 2 * Math.atan(1 / focal) * 180 / Math.PI;
+    camera.aspect = focal * renderWidth / (2 * fitX * distance);
+    camera.position.copy(grid.center).add(new Vector3(0, distance * vertical, distance * horizontal));
+    camera.lookAt(grid.center);
+    camera.updateMatrixWorld();
+    camera.updateProjectionMatrix();
+    this.keyboardOffsetY = -gridHeight * halfSpread / 2;
+
+    const mouseCamera = this.mouse.camera;
+    const center = this.desk.mouseGroup.getWorldPosition(new Vector3());
+    center.y += .06;
+    mouseCamera.position.copy(center).add(new Vector3(0, 4.7, 4.3));
+    mouseCamera.lookAt(center);
+    mouseCamera.updateMatrixWorld();
+    const outline = this.desk.mouseShellBounds(mouseCamera);
+    const size = outline.getSize(new Vector2());
+    const mid = outline.getCenter(new Vector2());
+    this.mouseScaleX = mouseWidth / (size.x * renderWidth / 2);
+    this.mouseScaleY = mouseHeight / (size.y * renderHeight / 2);
+    this.mouseOffsetX = -mid.x * renderWidth / 2 * this.mouseScaleX;
+    this.mouseOffsetY = mid.y * renderHeight / 2 * this.mouseScaleY;
+    this.keyboardAnimation = 1;
+    this.mouseAnimation = .4;
+    this.lastTime = null;
+  }
+
+  update(now: number, keys: ReadonlyMap<string, { pressAmount: number }>, left: boolean, right: boolean, scroll: number,
+    tailKey?: string, tailPressure = 0): void {
+    if (now === this.lastTime) return;
+    const dt = this.lastTime === null ? 1 / 60 : Math.max(0, Math.min(0.034, (now - this.lastTime) / 1000));
     this.lastTime = now;
 
     for (const [id, animation] of keys) {
       const key = this.desk.getKeyById(id);
-      const down = animation.pressAmount > 0.5;
+      const down = Math.max(animation.pressAmount, id === tailKey ? tailPressure : 0) > .5;
       if (key && key.down !== down) {
         this.desk.setKeyDown(id, down);
         this.keyboardAnimation = 1;
@@ -65,9 +119,9 @@ export class DuorouEquipment3D {
 
     if (scroll > this.scrollFlash) {
       this.desk.pulseScrollWheel();
-      this.mouseAnimation = 0.4;
+      this.mouseAnimation = .4;
     }
-    if (left !== this.leftDown || right !== this.rightDown) this.mouseAnimation = 0.4;
+    if (left !== this.leftDown || right !== this.rightDown) this.mouseAnimation = .4;
     this.leftDown = left;
     this.rightDown = right;
     this.scrollFlash = scroll;
@@ -89,11 +143,16 @@ export class DuorouEquipment3D {
 
   draw(ctx: CanvasRenderingContext2D, item: 'keyboard' | 'mouse'): void {
     const { image, width, height } = this[item];
-    const heightScale = item === 'mouse' ? 1.12 : 1;
-    ctx.drawImage(image, -width / 2, -height * heightScale / 2, width, height * heightScale);
+    if (item === 'keyboard') {
+      ctx.drawImage(image, -width / 2, this.keyboardOffsetY - height / 2, width, height);
+    } else {
+      const w = width * this.mouseScaleX;
+      const h = height * this.mouseScaleY;
+      ctx.drawImage(image, this.mouseOffsetX - w / 2, this.mouseOffsetY - h / 2, w, h);
+    }
   }
 
-  private renderLayer(layer: ReturnType<typeof createLayer>): void {
+  private renderLayer(layer: { camera: Camera; image: HTMLCanvasElement; ctx: CanvasRenderingContext2D }): void {
     this.renderer.render(this.scene, layer.camera);
     const { ctx, image } = layer;
     const { width, height } = image;

@@ -247,7 +247,12 @@ export async function loadDuorou(engine: KuroCatEngine) {
         if (combined) heldPaws.drawOn(ctx, picture);
         else ctx.drawImage(picture, 0, 0, width, height);
       } else if (idleAction && idleAction.frame !== null) {
-        idleAtlases[idleAction.clip].draw(ctx, idleAction.frame);
+        const sequence = idleClips[idleAction.clip].frames;
+        if (idleAction.frame === sequence[0] || idleAction.frame === sequence.at(-1)) {
+          ctx.drawImage(restBody.canvas, 0, 0, width, height);
+        } else {
+          idleAtlases[idleAction.clip].draw(ctx, idleAction.frame);
+        }
       } else if (restFrame > 0 || facingFront) {
         ctx.drawImage(restBody.canvas, 0, 0, width, height);
       } else {

@@ -9,7 +9,7 @@ import {
 } from './keyboardLayout';
 import { catAudio } from './audio';
 import { resolveCustomSkin, type CatSkinConfig, type ResolvedSkin } from './catSkins';
-import type { DuorouEquipment3D } from './pets/duorou/equipment3d';
+import type { PetEquipment3D } from './pets/duorou/equipment3d';
 import { drawSleepIndicator } from './pets/sleep-indicator';
 
 export const LOGICAL_W = 420;
@@ -17,6 +17,12 @@ export const LOGICAL_H = 440;
 export type CatBreed = 'black' | 'ragdoll';
 export type KeyboardOrientation = 'cat' | 'viewer';
 const AUTO_SLEEP_DELAY = 28_000;
+const KEY_GRID_PAD_X = 7;
+const KEY_GRID_PAD_Y = 6;
+const KEY_GRID_BACK_SCALE = .94;
+const KEY_GRID_TAPER = .09;
+const MOUSE_RADIUS_X = 18.5;
+const MOUSE_RADIUS_Y = 23;
 
 interface Vec2 {
   x: number;
@@ -118,7 +124,7 @@ export class KuroCatEngine {
   private renderScale = 1.0;
   private embedded = false;
   private petPainter: ((ctx: CanvasRenderingContext2D, now: number, sleepReady: boolean) => void) | null = null;
-  private petEquipment3d: DuorouEquipment3D | null = null;
+  private petEquipment3d: PetEquipment3D | null = null;
 
   public setPetPainter(painter: ((ctx: CanvasRenderingContext2D, now: number, sleepReady: boolean) => void) | null): void {
     if (painter !== this.petPainter) {
@@ -129,36 +135,40 @@ export class KuroCatEngine {
     this.petPainter = painter;
   }
 
-  public setPetEquipment3d(equipment: DuorouEquipment3D | null): void {
+  public setPetEquipment3d(equipment: PetEquipment3D | null): void {
     this.petEquipment3d = equipment;
   }
 
   public paintPetEquipment(ctx: CanvasRenderingContext2D, item: 'keyboard' | 'mouse'): void {
+    this.drawPetEquipment(ctx, item);
+    if (!this.showKeyBubbles) return;
+    if (item === 'keyboard') this.drawKeyBubbles(ctx);
+    else this.drawMouseBadges(ctx);
+  }
+
+  private drawPetEquipment(ctx: CanvasRenderingContext2D, item: 'keyboard' | 'mouse'): void {
     const equipment = this.petEquipment3d;
-    if (item === 'keyboard') {
-      if (equipment?.isAvailable()) {
-        equipment.update(this.lastTime, this.keyAnims, this.mouseLeftPress > 0.2, this.mouseRightPress > 0.2,
-          Math.max(this.mouseScrollFlash, this.mouseMiddlePress));
-        ctx.save();
-        ctx.translate(this.kbCenterX, this.kbCenterY + this.kbBounce * 1.1);
-        ctx.rotate(this.kbTiltRad);
-        equipment.draw(ctx, item);
-        ctx.restore();
-      } else {
-        this.drawKeyboard(ctx);
-      }
-      if (this.showKeyBubbles) this.drawKeyBubbles(ctx);
-    } else {
-      if (equipment?.isAvailable()) {
-        ctx.save();
-        ctx.translate(this.mouseBaseX + this.mouseOffsetX, this.mouseBaseY + this.mouseOffsetY);
-        equipment.draw(ctx, item);
-        ctx.restore();
-      } else {
-        this.drawMiniMouse(ctx);
-      }
-      if (this.showKeyBubbles) this.drawMouseBadges(ctx);
+    if (!equipment?.isAvailable()) {
+      if (item === 'keyboard') this.drawKeyboard(ctx);
+      else this.drawMiniMouse(ctx);
+      return;
     }
+
+    equipment.configure(this.keyboardLayout, this.keyboardOrientation,
+      this.kbWidth - KEY_GRID_PAD_X * 2, this.kbHeight - KEY_GRID_PAD_Y * 2,
+      KEY_GRID_BACK_SCALE, KEY_GRID_TAPER, MOUSE_RADIUS_X * 2, MOUSE_RADIUS_Y * 2);
+    equipment.update(this.lastTime, this.keyAnims, this.mouseLeftPress > 0.2, this.mouseRightPress > 0.2,
+      Math.max(this.mouseScrollFlash, this.mouseMiddlePress), this.tailStrike?.keyId, this.tailStrike?.pressure);
+    ctx.save();
+    if (item === 'keyboard') {
+      ctx.translate(this.kbCenterX, this.kbCenterY + this.kbBounce * 1.1);
+      ctx.rotate(this.kbTiltRad);
+    } else {
+      ctx.translate(this.mouseBaseX + this.mouseOffsetX, this.mouseBaseY + this.mouseOffsetY);
+      ctx.rotate(-0.06);
+    }
+    equipment.draw(ctx, item);
+    ctx.restore();
   }
 
   public getPetMouse(): { base: [number, number]; offset: [number, number] } {
@@ -765,14 +775,12 @@ export class KuroCatEngine {
     const screenU = isCatFacing ? layout.totalUnits - uCol : uCol;
     const screenRow = isCatFacing ? layout.totalRows - rowPos : rowPos;
 
-    const padX = 7;
-    const padY = 6;
-    const innerW = this.kbWidth - padX * 2;
-    const innerH = this.kbHeight - padY * 2;
+    const innerW = this.kbWidth - KEY_GRID_PAD_X * 2;
+    const innerH = this.kbHeight - KEY_GRID_PAD_Y * 2;
     const localX = -innerW / 2 + (screenU / layout.totalUnits) * innerW;
     const localY = -innerH / 2 + (screenRow / layout.totalRows) * innerH;
 
-    const depthFactor = 0.94 + (screenRow / layout.totalRows) * 0.09;
+    const depthFactor = KEY_GRID_BACK_SCALE + (screenRow / layout.totalRows) * KEY_GRID_TAPER;
     const px = localX * depthFactor;
     const py = localY;
 
@@ -1141,8 +1149,8 @@ export class KuroCatEngine {
     if (!this.tailStrike) this.drawTail(ctx);
 
     // Layer 2: Mini mouse & 65% mechanical keyboard
-    this.drawMiniMouse(ctx);
-    this.drawKeyboard(ctx);
+    this.drawPetEquipment(ctx, 'mouse');
+    this.drawPetEquipment(ctx, 'keyboard');
     // A reaching tail crosses in front of the keyboard and behind the cat.
     if (this.tailStrike) this.drawTail(ctx);
 
@@ -1805,8 +1813,8 @@ export class KuroCatEngine {
   private drawMiniMouse(ctx: CanvasRenderingContext2D): void {
     const mx = this.mouseBaseX + this.mouseOffsetX;
     const my = this.mouseBaseY + this.mouseOffsetY;
-    const rx = 18.5;
-    const ry = 23.0;
+    const rx = MOUSE_RADIUS_X;
+    const ry = MOUSE_RADIUS_Y;
     const lPress = this.mouseLeftPress;
     const rPress = this.mouseRightPress;
     const mPress = Math.max(this.mouseMiddlePress, this.mouseScrollFlash);
@@ -1947,10 +1955,8 @@ export class KuroCatEngine {
     const layout = getKeyboardLayout(this.keyboardLayout);
     const isCatFacing = this.keyboardOrientation === 'cat';
     const is108 = this.keyboardLayout === '108';
-    const padX = 7;
-    const padY = 6;
-    const innerW = this.kbWidth - padX * 2;
-    const innerH = this.kbHeight - padY * 2;
+    const innerW = this.kbWidth - KEY_GRID_PAD_X * 2;
+    const innerH = this.kbHeight - KEY_GRID_PAD_Y * 2;
 
     ctx.save();
     ctx.translate(this.kbCenterX, this.kbCenterY + this.kbBounce * 1.1);
@@ -2000,7 +2006,7 @@ export class KuroCatEngine {
         : key.uStart;
 
       const rowCenterFrac = (screenRowTop + rSpan * 0.5) / layout.totalRows;
-      const depthScale = 0.94 + rowCenterFrac * 0.09;
+      const depthScale = KEY_GRID_BACK_SCALE + rowCenterFrac * KEY_GRID_TAPER;
 
       const rawX = -innerW / 2 + screenUStart * unitW + gap * 0.5;
       const rawW = key.uWidth * unitW - gap;

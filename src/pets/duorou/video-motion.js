@@ -1,13 +1,26 @@
 export function createVideoAtlas(pages, data) {
-  const { columns, rows, cell: [w, h], size, origin, frames } = data;
+  const { columns, rows, cell: [w, h], size, origin, frames, alignment } = data;
   const capacity = columns * rows;
   const indices = new Map(frames.map((frame, i) => [frame, i]));
   return {
     draw(ctx, frame) {
       const id = indices.get(frame);
       const tile = id % capacity;
+      let [x, y] = origin;
+      let [width, height] = size;
+      if (alignment) {
+        const { start, end, scale: [sx, sy], shift: [dx, dy] } = alignment;
+        const progress = Math.min(1, id / start, (frames.length - 1 - id) / (frames.length - 1 - end));
+        const weight = progress * progress * (3 - 2 * progress);
+        const scaleX = 1 + weight * (sx - 1);
+        const scaleY = 1 + weight * (sy - 1);
+        x = scaleX * x + weight * dx;
+        y = scaleY * y + weight * dy;
+        width *= scaleX;
+        height *= scaleY;
+      }
       ctx.drawImage(pages[Math.floor(id / capacity)], (tile % columns) * w,
-        Math.floor(tile / columns) * h, w, h, ...origin, ...size);
+        Math.floor(tile / columns) * h, w, h, x, y, width, height);
     },
   };
 }
