@@ -52,6 +52,7 @@ function sceneCanvas(scale: number) {
 
 export async function loadDuorou(engine: KuroCatEngine) {
   const idleClips = [videos.approvedIdle.look, videos.approvedIdle.pat];
+  const breathingStart = videos.rest.breathe[0];
   // Keep the atlases from competing for decoding memory when the pet loads.
   const gazeFrames = await loadPages('gaze-page', frames.hdGaze.pages);
   const pawFrames = await loadPages('paws', frames.dualPaws.pages);
@@ -85,7 +86,7 @@ export async function loadDuorou(engine: KuroCatEngine) {
   let gaze = createGaze();
   let look = createGazeController();
   let rest = createRestMotion(videos.rest);
-  let idleActions = createIdleActions(idleClips);
+  let idleActions = createIdleActions(idleClips, breathingStart);
   let heldLook = createHeldLook(videos.held);
   let mouseClick = createMouseClickMotion();
   let paws = createPaws();
@@ -112,7 +113,7 @@ export async function loadDuorou(engine: KuroCatEngine) {
       gaze = createGaze();
       look = createGazeController();
       rest = createRestMotion(videos.rest);
-      idleActions = createIdleActions(idleClips);
+      idleActions = createIdleActions(idleClips, breathingStart);
       heldLook = createHeldLook(videos.held);
       mouseClick = createMouseClickMotion();
       paws = createPaws();
@@ -199,13 +200,15 @@ export async function loadDuorou(engine: KuroCatEngine) {
       const facingFront = gaze.pose().sourceFrames[0] === 0 && !gaze.pose().nod;
       if (legacyUpper && !needsLegacy && facingFront) legacyUpper = false;
 
-      const idleAction = idleActions.step(now, idleSince, idle && facingFront, lastRest === 0, !wantsSleep);
+      const action = idleActions.step(now, idleSince, idle && facingFront, lastRest, !wantsSleep);
+      const idleAction = action?.resumeBreathing ? null : action;
       const sleeping = wantsSleep && facingFront && !idleAction;
       if (sleeping) dozeSince ??= now;
       else dozeSince = null;
       const expression = sleeping ? 'sleep' : facingFront && hover ? 'hover' :
         facingFront && idle && !idleAction && idleFor > 300 ? 'idle' : null;
-      const restFrame = rest.step(dt, expression);
+      const lookStarting = idleAction?.clip === 0 && idleAction.frame === idleClips[0].frames[0];
+      const restFrame = action?.resumeBreathing || lookStarting ? rest.resumeBreathing() : rest.step(dt, expression);
       if (restFrame !== lastRest) {
         restBody.ctx.clearRect(0, 0, width, height);
         restAtlas.draw(restBody.ctx, restFrame);

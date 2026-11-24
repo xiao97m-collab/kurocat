@@ -28,28 +28,69 @@ test('idle clip alignment eases off at the shared resting pose without moving th
 test('idle actions wait for the resting pose and alternate after ten quiet seconds', () => {
   const actions = createIdleActions([{ frames: [0, 1, 2], fps: 20 }, { frames: [0, 1], fps: 20 }]);
 
-  assert.equal(actions.step(9999, 0, true, true), null);
-  assert.deepEqual(actions.step(10000, 0, true, false), { clip: 0, frame: null });
-  assert.deepEqual(actions.step(10100, 0, true, true), { clip: 0, frame: 0 });
-  assert.deepEqual(actions.step(10150, 0, true, true), { clip: 0, frame: 1 });
-  assert.deepEqual(actions.step(10200, 0, true, true), { clip: 0, frame: 2 });
-  assert.equal(actions.step(10250, 0, true, true), null);
-  assert.equal(actions.step(20249, 0, true, true), null);
-  assert.deepEqual(actions.step(20250, 0, true, true), { clip: 1, frame: 0 });
-  assert.equal(actions.step(20280, 20280, false, true), null);
-  assert.equal(actions.step(30279, 20280, true, true), null);
-  assert.deepEqual(actions.step(30280, 20280, true, true), { clip: 0, frame: 0 });
-  assert.equal(actions.step(30300, 30300, true, true), null);
+  assert.equal(actions.step(9999, 0, true, 0), null);
+  assert.deepEqual(actions.step(10000, 0, true, 18), { clip: 0, frame: null });
+  assert.deepEqual(actions.step(10100, 0, true, 0), { clip: 0, frame: 0 });
+  assert.deepEqual(actions.step(10150, 0, true, 0), { clip: 0, frame: 1 });
+  assert.deepEqual(actions.step(10200, 0, true, 0), { clip: 0, frame: 2 });
+  assert.equal(actions.step(10250, 0, true, 0), null);
+  assert.equal(actions.step(20249, 0, true, 0), null);
+  assert.deepEqual(actions.step(20250, 0, true, 0), { clip: 1, frame: 0 });
+  assert.equal(actions.step(20280, 20280, false, 0), null);
+  assert.equal(actions.step(30279, 20280, true, 0), null);
+  assert.deepEqual(actions.step(30280, 20280, true, 0), { clip: 0, frame: 0 });
+  assert.equal(actions.step(30300, 30300, true, 0), null);
 });
 
 test('sleep lets the current idle action finish and defers the next action until after waking', () => {
   const actions = createIdleActions([{ frames: [0, 1, 2], fps: 10 }, { frames: [0], fps: 10 }]);
-  assert.deepEqual(actions.step(10_000, 0, true, true), { clip: 0, frame: 0 });
-  assert.deepEqual(actions.step(10_100, 0, true, false, false), { clip: 0, frame: 1 });
-  assert.equal(actions.step(10_300, 0, true, false, false), null);
-  assert.equal(actions.step(30_000, 0, true, true, false), null);
-  assert.equal(actions.step(31_000, 31_000, true, true), null);
-  assert.deepEqual(actions.step(41_000, 31_000, true, true), { clip: 1, frame: 0 });
+  assert.deepEqual(actions.step(10_000, 0, true, 0), { clip: 0, frame: 0 });
+  assert.deepEqual(actions.step(10_100, 0, true, 18, false), { clip: 0, frame: 1 });
+  assert.equal(actions.step(10_300, 0, true, 18, false), null);
+  assert.equal(actions.step(30_000, 0, true, 0, false), null);
+  assert.equal(actions.step(31_000, 31_000, true, 0), null);
+  assert.deepEqual(actions.step(41_000, 31_000, true, 0), { clip: 1, frame: 0 });
+});
+
+test('the look-around waits for its breathing frame without restarting the resting pose', () => {
+  const { rest, approvedIdle } = asset('video-scenes');
+  const entry = rest.breathe[0];
+  const actions = createIdleActions([approvedIdle.look, approvedIdle.pat], entry);
+
+  assert.equal(actions.step(9999, 0, true, entry), null);
+  assert.equal(actions.step(10_000, 0, true, rest.breathe[1]), null);
+  assert.equal(actions.step(10_060, 0, true, 0), null);
+  assert.deepEqual(actions.step(10_120, 0, true, entry), { clip: 0, frame: 0 });
+  assert.deepEqual(actions.step(10_150, 0, true, 0), { clip: 0, frame: 0 });
+  assert.deepEqual(actions.step(10_165, 0, true, 0), { clip: 0, frame: 1 });
+});
+
+test('both idle actions resume breathing directly even if a render crosses the last slot', () => {
+  const { rest, approvedIdle } = asset('video-scenes');
+  const breathingFrame = rest.breathe[0];
+
+  for (const clip of [approvedIdle.look, approvedIdle.pat]) {
+    const start = 10_000;
+    const entry = clip.startFromBreathing ? breathingFrame : 0;
+    const frameTime = 1000 / clip.fps;
+    const end = start + (clip.frames.length - 1) * frameTime;
+
+    for (const delay of [1, 2 * frameTime]) {
+      const actions = createIdleActions([clip], breathingFrame);
+      const motion = createRestMotion(rest);
+      assert.deepEqual(actions.step(start, 0, true, entry), { clip: 0, frame: clip.frames[0] });
+      assert.deepEqual(actions.step(end - frameTime / 2, 0, true, 0), { clip: 0, frame: clip.frames.at(-2) });
+      assert.deepEqual(actions.step(end + delay, 0, true, 0), { clip: 0, frame: null, resumeBreathing: true });
+      assert.equal(actions.step(end + delay + 16, 0, true, breathingFrame), null);
+      assert.equal(motion.resumeBreathing(), breathingFrame);
+      assert.equal(motion.step(33, 'idle'), breathingFrame);
+      assert.equal(motion.step(33, 'idle'), rest.breathe[1]);
+    }
+
+    const interrupted = createIdleActions([clip], breathingFrame);
+    interrupted.step(start, 0, true, entry);
+    assert.equal(interrupted.step(end + 1, end + 1, false, 0), null);
+  }
 });
 
 test('each rapid click presses the paw before it settles', () => {

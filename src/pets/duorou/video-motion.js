@@ -27,14 +27,14 @@ export function createVideoAtlas(pages, data) {
 
 const idleActionDelay = 10_000;
 
-export function createIdleActions(clips) {
+export function createIdleActions(clips, breathingFrame) {
   let lastActivity = null;
   let nextAt = 0;
   let active = null;
   let nextClip = 0;
 
   return {
-    step(now, idleSince, eligible, resting, mayStart = true) {
+    step(now, idleSince, eligible, restFrame, mayStart = true) {
       if (lastActivity !== idleSince || !eligible) {
         lastActivity = idleSince;
         nextAt = idleSince + idleActionDelay;
@@ -44,19 +44,25 @@ export function createIdleActions(clips) {
 
       if (!active) {
         if (!mayStart) return null;
-        // Let breathing return to the shared resting pose before the clip starts.
-        if (!resting) return { clip: nextClip, frame: null };
+        const { startFromBreathing = false } = clips[nextClip];
+        if (startFromBreathing) {
+          if (restFrame !== breathingFrame) return null;
+        } else if (restFrame !== 0) {
+          return { clip: nextClip, frame: null };
+        }
         active = { clip: nextClip, start: now };
         nextClip = (nextClip + 1) % clips.length;
       }
 
-      const { frames, fps } = clips[active.clip];
+      const { frames, fps, resumeBreathing = false } = clips[active.clip];
       const index = Math.floor((now - active.start) * fps / 1000);
-      if (index < frames.length) return { clip: active.clip, frame: frames[index] };
+      // The final slot of a breathing handoff is drawn by the rest animation.
+      if (index < frames.length - Number(resumeBreathing)) return { clip: active.clip, frame: frames[index] };
 
+      const clip = active.clip;
       active = null;
       nextAt = now + idleActionDelay;
-      return null;
+      return resumeBreathing ? { clip, frame: null, resumeBreathing } : null;
     },
   };
 }
@@ -133,6 +139,10 @@ export function createRestMotion(data) {
   }
 
   return {
+    resumeBreathing() {
+      select('breathe');
+      return data.breathe[0];
+    },
     step(dt, intent) {
       const active = intent !== null;
       const wantsClosed = intent === 'hover' || intent === 'sleep';
