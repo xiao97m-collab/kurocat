@@ -22,6 +22,7 @@
         <div class="breed-pills" id="breed-pills">
           <button class="breed-pill active" data-breed="black">🐈‍⬛ 经典小黑猫</button>
           <button class="breed-pill" data-breed="duorou">🐶 多肉（萨摩耶）</button>
+          <button class="breed-pill" data-breed="corgi">🐶 奶油柯基</button>
         </div>
       </div>
       <div class="menu-sep"></div>
@@ -66,8 +67,24 @@
           <button class="kb-pill" data-kborient="viewer">面向观众</button>
         </div>
       </div>
+      <div class="menu-scale-row">
+        <span class="menu-scale-label">键帽风格</span>
+        <div class="kb-pills appearance-pills">
+          <button class="kb-pill active" data-keyboard-theme="classic" aria-pressed="true">经典</button>
+          <button class="kb-pill" data-keyboard-theme="voyage" aria-pressed="false">海贼王航海</button>
+          <button class="kb-pill" data-keyboard-theme="rgb" aria-pressed="false">青轴流光</button>
+          <button class="kb-pill" data-keyboard-theme="terminal" aria-pressed="false">黑橙程序员</button>
+        </div>
+      </div>
+      <div class="menu-sep"></div>
+      <button class="menu-item" data-action="toggle-weekday-sign">
+        <span>星期直播灯牌</span><span class="menu-check" id="chk-weekday-sign"></span>
+      </button>
+      <button class="menu-item" data-action="toggle-scarf">
+        <span>蓝色围脖</span><span class="menu-check" id="chk-scarf"></span>
+      </button>
       <div class="menu-scale-row" id="pet-equipment-options">
-        <span class="menu-scale-label">键鼠样式</span>
+        <span class="menu-scale-label">键鼠渲染</span>
         <div class="kb-pills">
           <button class="kb-pill active" data-pet-equipment="2d" aria-pressed="true">2D</button>
           <button class="kb-pill" data-pet-equipment="3d" aria-pressed="false">3D</button>

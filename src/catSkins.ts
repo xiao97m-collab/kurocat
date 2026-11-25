@@ -206,4 +206,13 @@ export const DEFAULT_BUILTIN_CATS: CatSkinConfig[] = [
     eyeColorTop: '#29221c',
     accentColor: '#e6cea6',
   },
+  {
+    id: 'corgi',
+    name: '奶油柯基',
+    emoji: '🐶',
+    builtin: true,
+    furColor: '#edb583',
+    eyeColorTop: '#795035',
+    accentColor: '#edbc89',
+  },
 ];

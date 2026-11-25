@@ -6,6 +6,7 @@ import { KuroCatEngine, type KeyboardOrientation } from './catEngine';
 import { catAudio } from './audio';
 import { DEFAULT_BUILTIN_CATS, type CatSkinConfig } from './catSkins';
 import type { KeyboardLayoutId } from './keyboardLayout';
+import { isKeyboardTheme, type KeyboardTheme } from './keyboardTheme';
 import type { loadDuorou } from './pets/duorou';
 import type { PetEquipment3D } from './pets/duorou/equipment3d';
 
@@ -25,6 +26,9 @@ interface AppSettings {
   mcpPort: number;
   keyboardLayout: KeyboardLayoutId;
   keyboardOrientation: KeyboardOrientation;
+  keyboardTheme: KeyboardTheme;
+  weekdaySign: boolean | null;
+  blueScarf: boolean;
   duorouEquipment3d: boolean;
 }
 
@@ -86,6 +90,9 @@ let settings: AppSettings = {
   mcpPort: 27420,
   keyboardLayout: '65',
   keyboardOrientation: 'cat',
+  keyboardTheme: 'classic',
+  weekdaySign: null,
+  blueScarf: false,
   duorouEquipment3d: false,
 };
 
@@ -95,6 +102,7 @@ const canvas = document.getElementById('pet-canvas') as HTMLCanvasElement;
 const menuEl = document.getElementById('context-menu') as HTMLDivElement;
 const breedPillsEl = document.getElementById('breed-pills') as HTMLDivElement;
 const keyboardLayoutEl = document.getElementById('keyboard-layout-options') as HTMLDivElement;
+const scarfButton = menuEl.querySelector<HTMLButtonElement>('[data-action="toggle-scarf"]')!;
 const equipmentEl = document.getElementById('pet-equipment-options') as HTMLDivElement;
 const scaleSliderEl = document.getElementById('scale-slider') as HTMLInputElement;
 const scaleValueEl = document.getElementById('scale-value') as HTMLButtonElement;
@@ -104,10 +112,14 @@ const btnToastInstallEl = document.getElementById('btn-toast-install') as HTMLBu
 const btnToastOpenEl = document.getElementById('btn-toast-open') as HTMLButtonElement;
 const btnToastCloseEl = document.getElementById('btn-toast-close') as HTMLButtonElement;
 const engine = new KuroCatEngine(canvas);
-type Duorou = Awaited<ReturnType<typeof loadDuorou>>;
-let duorou: Duorou | null = null;
-let duorouLoad: Promise<Duorou> | null = null;
-let activeDuorou: Duorou | null = null;
+type DesktopPet = Awaited<ReturnType<typeof loadDuorou>> | Awaited<ReturnType<typeof import('./pets/corgi').loadCorgi>>;
+const petLoaders: Record<string, () => Promise<DesktopPet>> = {
+  duorou: () => import('./pets/duorou').then(module => module.loadDuorou(engine)),
+  corgi: () => import('./pets/corgi').then(module => module.loadCorgi(engine)),
+};
+const petLoads = new Map<string, Promise<DesktopPet>>();
+let activePet: DesktopPet | null = null;
+let activePetId = '';
 let equipment3d: PetEquipment3D | null = null;
 let equipmentLoad: Promise<void> | null = null;
 
@@ -129,32 +141,31 @@ function syncPetEquipment(): void {
   }).finally(() => { equipmentLoad = null; });
 }
 
-function selectDuorou(selected: boolean): void {
-  if (!selected) {
-    activeDuorou = null;
-    engine.setPetPainter(null);
-    return;
+function selectDesktopPet(id: string): void {
+  if (id === activePetId) return;
+  activePetId = id;
+  activePet = null;
+  engine.setPetPainter(null);
+  const loader = petLoaders[id];
+  if (!loader) return;
+
+  let load = petLoads.get(id);
+  if (!load) {
+    load = loader();
+    petLoads.set(id, load);
   }
-  if (duorou) {
-    if (activeDuorou !== duorou) {
-      duorou.reset();
-      activeDuorou = duorou;
-      engine.setPetPainter(duorou.draw);
-    }
-    return;
-  }
-  if (duorouLoad) return;
-  duorouLoad = import('./pets/duorou').then(module => module.loadDuorou(engine));
-  void duorouLoad.then(pet => {
-    duorou = pet;
-    if (settings.catBreed === duorouId) selectDuorou(true);
+  void load.then(pet => {
+    if (id !== activePetId) return;
+    pet.reset();
+    activePet = pet;
+    engine.setPetPainter(pet.draw);
   }).catch(error => {
-    console.error('Failed to load Duorou:', error);
-    if (settings.catBreed === duorouId) {
-      showUpdateToast('多肉加载失败，已切回小黑猫', { autoHideMs: 4200 });
-      void applySettingsPatch({ catBreed: 'black' });
-    }
-  }).finally(() => { duorouLoad = null; });
+    petLoads.delete(id);
+    console.error('Failed to load desktop pet:', error);
+    if (id !== activePetId) return;
+    showUpdateToast('角色加载失败，已切回小黑猫', { autoHideMs: 4200 });
+    void applySettingsPatch({ catBreed: 'black' });
+  });
 }
 
 function renderBreedPills(): void {
@@ -196,12 +207,22 @@ function syncMenuUI(): void {
   setCheck('chk-top', settings.alwaysOnTop);
   setCheck('chk-autostart', settings.autostart);
   setCheck('chk-mcp', settings.mcpEnabled);
+  const weekdaySign = settings.weekdaySign ?? settings.catBreed === duorouId;
+  setCheck('chk-weekday-sign', weekdaySign);
+  setCheck('chk-scarf', settings.blueScarf);
+  const theme = isKeyboardTheme(settings.keyboardTheme) ? settings.keyboardTheme : 'classic';
+  menuEl.querySelectorAll<HTMLButtonElement>('[data-keyboard-theme]').forEach(btn => {
+    const active = btn.dataset.keyboardTheme === theme;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', String(active));
+  });
 
   if (!sliderDragging) {
     updateScaleSliderVisual(settings.scale);
   }
 
   const isDuorou = settings.catBreed === duorouId;
+  scarfButton.hidden = isDuorou;
   const kbLayout: KeyboardLayoutId = !isDuorou && settings.keyboardLayout === '108' ? '108' : '65';
   const kbOrient: KeyboardOrientation = !isDuorou && settings.keyboardOrientation === 'viewer' ? 'viewer' : 'cat';
   keyboardLayoutEl.hidden = isDuorou;
@@ -230,14 +251,18 @@ function syncMenuUI(): void {
   }
 
   engine.showKeyBubbles = settings.showKeyBubbles;
+  engine.keyboardTheme = theme;
+  engine.petDecorations = { weekdaySign, blueScarf: !isDuorou && settings.blueScarf };
   engine.setCatAppearance(isDuorou ? 'black' : activeCat?.id || 'black', isDuorou ? null : activeCat);
+  const layoutChanged = engine.keyboardLayout !== kbLayout || engine.keyboardOrientation !== kbOrient;
   engine.setKeyboardConfig(kbLayout, kbOrient);
-  selectDuorou(isDuorou);
+  if (layoutChanged) activePet?.reset();
+  selectDesktopPet(settings.catBreed);
   syncPetEquipment();
   if (!sliderDragging) {
     engine.setRenderScale(settings.scale);
   }
-  catAudio.setEnabled(settings.soundEnabled && !isDuorou);
+  catAudio.setEnabled(settings.soundEnabled && settings.catBreed === 'black');
 }
 
 function closeContextMenu(): void {
@@ -555,27 +580,29 @@ async function bootstrap(): Promise<void> {
     switch (p.kind) {
       case 'keyDown':
         engine.onKeyDown(p.vk, p.repeat);
-        activeDuorou?.keyDown(p.vk, p.repeat, performance.now());
+        activePet?.keyDown(p.vk, p.repeat, performance.now());
         break;
       case 'keyUp':
         engine.onKeyUp(p.vk);
         break;
       case 'mouseMove':
-        if (engine.onGlobalMouseMove(p.nx, p.ny, p.x, p.y)) {
-          activeDuorou?.mouseActivity(performance.now());
+        if (activePet && 'mouseMove' in activePet) {
+          activePet.mouseMove(p.nx, p.ny, p.x, p.y, performance.now());
+        } else if (engine.onGlobalMouseMove(p.nx, p.ny, p.x, p.y)) {
+          activePet?.mouseActivity(performance.now());
         }
         break;
       case 'mouseDown':
         engine.onMouseDown(p.button);
-        activeDuorou?.mouseActivity(performance.now(), p.button, true);
+        activePet?.mouseActivity(performance.now(), p.button, true);
         break;
       case 'mouseUp':
         engine.onMouseUp(p.button);
-        activeDuorou?.mouseActivity(performance.now(), p.button, false);
+        activePet?.mouseActivity(performance.now(), p.button, false);
         break;
       case 'mouseWheel':
         engine.onMouseWheel();
-        activeDuorou?.mouseActivity(performance.now());
+        activePet?.mouseActivity(performance.now());
         break;
     }
   });
@@ -584,7 +611,7 @@ async function bootstrap(): Promise<void> {
     const c = ev.payload;
     altOverride = Boolean(c.altOverride);
     engine.onWindowCursor(c.relX, c.relY, c.overCat);
-    activeDuorou?.cursor(c.relX, c.relY, c.insideWindow, performance.now(), c.overCat);
+    activePet?.cursor(c.relX, c.relY, c.insideWindow, performance.now(), c.overCat);
     const interactive = !settings.clickThroughLocked || altOverride;
     canvas.classList.toggle('pet-hover', c.overCat && interactive);
   });
@@ -620,7 +647,7 @@ async function bootstrap(): Promise<void> {
 
   menuEl.addEventListener('click', (e) => {
     const target = (e.target as HTMLElement).closest<HTMLElement>(
-      '[data-action], [data-scale], [data-breed], [data-kblayout], [data-kborient], [data-pet-equipment]',
+      '[data-action], [data-scale], [data-breed], [data-kblayout], [data-kborient], [data-pet-equipment], [data-keyboard-theme]',
     );
     if (!target) return;
 
@@ -628,6 +655,12 @@ async function bootstrap(): Promise<void> {
     if (equipment === '2d' || equipment === '3d') {
       void applySettingsPatch({ duorouEquipment3d: equipment === '3d' });
       closeContextMenu();
+      return;
+    }
+
+    const theme = target.dataset.keyboardTheme;
+    if (isKeyboardTheme(theme)) {
+      void applySettingsPatch({ keyboardTheme: theme });
       return;
     }
 
@@ -660,6 +693,12 @@ async function bootstrap(): Promise<void> {
     }
 
     switch (target.dataset.action) {
+      case 'toggle-weekday-sign':
+        void applySettingsPatch({ weekdaySign: !(settings.weekdaySign ?? settings.catBreed === duorouId) });
+        break;
+      case 'toggle-scarf':
+        void applySettingsPatch({ blueScarf: !settings.blueScarf });
+        break;
       case 'toggle-bubbles':
         void applySettingsPatch({ showKeyBubbles: !settings.showKeyBubbles });
         break;

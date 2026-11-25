@@ -7,10 +7,10 @@ mod mcp;
 mod tray;
 mod updater;
 
-use cats::{cats_path, desktop_cats, CatSkinConfig, DUOROU_ID};
+use cats::{cats_path, desktop_cats, CatSkinConfig, CORGI_ID, DUOROU_ID};
 use config::{
     config_path, load_settings, normalize_cat_breed, normalize_keyboard_layout,
-    normalize_keyboard_orientation, save_settings, set_windows_autostart, AppSettings,
+    normalize_keyboard_orientation, normalize_keyboard_theme, save_settings, set_windows_autostart, AppSettings,
 };
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -135,6 +135,7 @@ fn update_settings(app: AppHandle, state: State<'_, AppState>, mut patch: AppSet
     }
     patch.keyboard_layout = normalize_keyboard_layout(&patch.keyboard_layout);
     patch.keyboard_orientation = normalize_keyboard_orientation(&patch.keyboard_orientation);
+    patch.keyboard_theme = normalize_keyboard_theme(&patch.keyboard_theme);
 
     let (prev_autostart, prev_scale, prev_layout) = {
         let s = state.settings.lock().unwrap();
@@ -557,6 +558,21 @@ fn is_over_duorou(rx: f64, ry: f64) -> (bool, bool) {
     (body || keyboard || mouse, body)
 }
 
+fn is_over_corgi(rx: f64, ry: f64, is_108: bool) -> (bool, bool) {
+    let (width, height) = base_dimensions(if is_108 { "108" } else { "65" });
+    let x = rx * width;
+    let y = ry * height;
+    let desk_shift = if is_108 { 76.0 } else { 0.0 };
+    let over_head = ((x - 207.0 - desk_shift) / 114.0).powi(2)
+        + ((y - 222.0) / 112.0).powi(2)
+        <= 1.0;
+    let over_loaf = ((x - 226.0 - desk_shift) / 127.0).powi(2)
+        + ((y - 278.0) / 53.0).powi(2)
+        <= 1.0;
+    let (over_desk, _) = is_over_interactive_silhouette(rx, ry, is_108);
+    (over_head || over_loaf || (over_desk && ry >= 0.68), over_head || over_loaf)
+}
+
 fn start_hit_test_loop(
     app: AppHandle,
     settings: Arc<Mutex<AppSettings>>,
@@ -606,12 +622,12 @@ fn start_hit_test_loop(
             let rx = (cx - pos.x) as f64 / w;
             let ry = (cy - pos.y) as f64 / h;
             let inside = rx >= 0.0 && rx <= 1.0 && ry >= 0.0 && ry <= 1.0;
-            let (locked, always_on_top, is_duorou, cur_scale, layout_str) = {
+            let (locked, always_on_top, pet, cur_scale, layout_str) = {
                 let s = settings.lock().unwrap();
                 (
                     s.click_through_locked,
                     s.always_on_top,
-                    s.cat_breed == DUOROU_ID,
+                    s.cat_breed.clone(),
                     s.scale.clamp(0.20, 1.50),
                     pet_keyboard_layout(&s).to_string(),
                 )
@@ -655,8 +671,10 @@ fn start_hit_test_loop(
             let pet_ry = (ry - pet_y0) / pet_h_frac;
             let inside_pet = pet_rx >= 0.0 && pet_rx <= 1.0 && pet_ry >= 0.0 && pet_ry <= 1.0;
 
-            let (over_interactive, raw_over_cat) = if inside_pet && is_duorou {
+            let (over_interactive, raw_over_cat) = if inside_pet && pet == DUOROU_ID {
                 is_over_duorou(pet_rx, pet_ry)
+            } else if inside_pet && pet == CORGI_ID {
+                is_over_corgi(pet_rx, pet_ry, layout_str == "108")
             } else if inside_pet {
                 is_over_interactive_silhouette(pet_rx, pet_ry, layout_str == "108")
             } else {

@@ -1,5 +1,6 @@
 // Keyboard and mouse from KuroCat v5.1.0 (57acb9b). MIT, see the repository LICENSE.
 import * as THREE from 'three';
+import { boardFinishes, keyFinish, paintVoyageMark, rippleAmount, type KeyboardTheme, type KeyRipple } from '../../keyboardTheme';
 import {
   getKeyboardLayout,
   resolveKeyByVk,
@@ -255,21 +256,22 @@ function getKeycapAtlas(
   layoutId: KeyboardLayoutId,
   keys: readonly KeySpec[],
   rotated180: boolean,
+  theme: KeyboardTheme,
 ): KeyAtlasData {
-  const cacheKey = `${layoutId}|${rotated180 ? 1 : 0}`;
+  const cacheKey = `${layoutId}|${rotated180 ? 1 : 0}|${theme}`;
   const cached = keyAtlasCache.get(cacheKey);
   if (cached) return cached;
 
-  const unique: Array<{ key: string; label: string; accent: 'base' | 'mod' | 'orange' }> = [];
+  const unique: Array<{ key: string; label: string; accent: 'base' | 'mod' | 'orange'; spec: KeySpec }> = [];
   const seen = new Set<string>();
   for (const spec of keys) {
     const accent: 'base' | 'mod' | 'orange' =
       spec.accent === 'orange' ? 'orange' : spec.accent === 'mod' ? 'mod' : 'base';
     const label = spec.id === 'space' ? '' : spec.id === 'esc' ? 'Esc' : spec.label;
-    const tk = `${label}|${accent}`;
+    const tk = theme === 'classic' ? `${label}|${accent}` : spec.id;
     if (!seen.has(tk)) {
       seen.add(tk);
-      unique.push({ key: tk, label, accent });
+      unique.push({ key: tk, label, accent, spec });
     }
   }
 
@@ -295,35 +297,37 @@ function getKeycapAtlas(
   const PAD = 10.0;
 
   const paintTile = (
-    item: { key: string; label: string; accent: 'base' | 'mod' | 'orange' },
+    item: (typeof unique)[number],
     col: number,
     row: number,
   ) => {
     const ox = col * CELL;
     const oy = row * CELL;
 
-    g.fillStyle =
-      item.accent === 'orange' ? '#f59b2e' : item.accent === 'mod' ? '#e6e4db' : '#f9f8f3';
+    const finish = keyFinish(theme, item.spec);
+    g.fillStyle = theme === 'classic'
+      ? (item.accent === 'orange' ? '#f59b2e' : item.accent === 'mod' ? '#e6e4db' : '#f9f8f3') : finish.top;
     g.fillRect(ox, oy, CELL, CELL);
 
     // Sculpted concave PBT keycap sheen
     const grad = g.createLinearGradient(0, oy + PAD, 0, oy + CELL - PAD);
-    grad.addColorStop(0, 'rgba(255,255,255,0.28)');
+    grad.addColorStop(0, theme === 'classic' ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.12)');
     grad.addColorStop(1, 'rgba(0,0,0,0.08)');
     g.fillStyle = grad;
     g.fillRect(ox, oy, CELL, CELL);
 
-    if (item.label) {
+    if (item.label || theme === 'voyage') {
       g.save();
       g.translate(ox + CELL * 0.5, oy + CELL * 0.5);
       if (rotated180) g.rotate(Math.PI);
       const len = item.label.length;
       const fontSize = len >= 4 ? 29 : len === 3 ? 35 : len === 2 ? 42 : 52;
       g.font = `700 ${fontSize}px "Segoe UI", system-ui, sans-serif`;
-      g.fillStyle = item.accent === 'orange' ? '#ffffff' : '#2b2d34';
+      g.fillStyle = theme === 'classic' ? (item.accent === 'orange' ? '#ffffff' : '#2b2d34') : finish.ink;
       g.textAlign = 'center';
       g.textBaseline = 'middle';
-      g.fillText(item.label, 0, 2);
+      if (item.label) g.fillText(item.label, theme === 'voyage' && ['esc', 'enter'].includes(item.spec.id) ? 10 : 0, 2);
+      if (theme === 'voyage') paintVoyageMark(g, item.spec, item.label ? -33 : 0, 0, item.label ? 29 : 24, finish.ink);
       g.restore();
     }
 
@@ -441,10 +445,11 @@ function makeRoundedSlabGeo(w: number, d: number, h: number, r: number, y: numbe
   return g;
 }
 
-function createInstancedKeyTopMaterial(atlasTex: THREE.CanvasTexture): THREE.ShaderMaterial {
+function createInstancedKeyTopMaterial(atlasTex: THREE.CanvasTexture, theme: KeyboardTheme): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms: {
       uAtlas: { value: atlasTex },
+      uClassic: { value: theme === 'classic' },
     },
     vertexShader: `
       attribute vec4 aUvRect;
@@ -464,11 +469,12 @@ function createInstancedKeyTopMaterial(atlasTex: THREE.CanvasTexture): THREE.Sha
     `,
     fragmentShader: `
       uniform sampler2D uAtlas;
+      uniform bool uClassic;
       varying vec2 vAtlasUv;
       varying vec3 vTint;
       void main() {
         vec4 texel = texture2D(uAtlas, vAtlasUv);
-        gl_FragColor = vec4(texel.rgb * vTint, 1.0);
+        gl_FragColor = vec4(uClassic ? texel.rgb * vTint : min(vec3(1.0), texel.rgb + vTint), 1.0);
         #include <colorspace_fragment>
       }
     `,
@@ -507,6 +513,11 @@ export class KeyboardAndMouse3D {
 
   private layoutId: KeyboardLayoutId = '65';
   private orientation: KeyboardOrientation = 'cat';
+  private theme: KeyboardTheme = 'classic';
+  private hadRipple = false;
+  private readonly cyanWave = new THREE.Color('#2dc5ff');
+  private readonly violetWave = new THREE.Color('#986fff');
+  private readonly keyGlow = new THREE.Color();
   private hitColor = new THREE.Color('#d4f044');
   private rightBtnColor = new THREE.Color('#ff7b3b');
   private boardH = 0.115;
@@ -748,14 +759,18 @@ export class KeyboardAndMouse3D {
     this.mouseBodyMat.needsUpdate = true;
   }
 
-  public rebuildBoard(layoutId: KeyboardLayoutId, orientation: KeyboardOrientation): void {
+  public rebuildBoard(layoutId: KeyboardLayoutId, orientation: KeyboardOrientation, theme: KeyboardTheme = 'classic'): void {
     // Skip redundant rebuild if nothing changed and meshes already exist
-    if (this.sideInstanced && this.layoutId === layoutId && this.orientation === orientation) {
+    if (this.sideInstanced && this.layoutId === layoutId && this.orientation === orientation && this.theme === theme) {
       return;
     }
 
     this.layoutId = layoutId;
     this.orientation = orientation;
+    this.theme = theme;
+    this.hadRipple = false;
+    this.keyGlow.set(theme === 'voyage' ? '#dba049' : theme === 'terminal' ? '#fa7730' : '#38d3f7');
+    const finish = boardFinishes[theme];
     this.keys.clear();
     this.activeKeys.clear();
 
@@ -802,9 +817,9 @@ export class KeyboardAndMouse3D {
     const bezelGeo = makeRoundedSlabGeo(W - 0.014, D - 0.014, 0.014, 0.060, this.boardH - 0.008);
     const plateGeo = makeRoundedSlabGeo(W - 0.062, D - 0.062, 0.008, 0.044, this.boardH + 0.004);
     const chassisGeo = mergeStaticGeometries([
-      { geo: baseGeo, color: '#202229' },
-      { geo: bezelGeo, color: '#2c2f38' },
-      { geo: plateGeo, color: '#181a20' },
+      { geo: baseGeo, color: theme === 'classic' ? '#202229' : finish.shell },
+      { geo: bezelGeo, color: theme === 'classic' ? '#2c2f38' : finish.edge },
+      { geo: plateGeo, color: theme === 'classic' ? '#181a20' : finish.plate },
     ]);
     baseGeo.dispose();
     bezelGeo.dispose();
@@ -815,7 +830,7 @@ export class KeyboardAndMouse3D {
 
     // Single Texture Atlas + 2 InstancedMeshes for ALL 67 or 108 keycaps (2 draw calls total!)
     const keyCount = layout.keys.length;
-    const atlas = getKeycapAtlas(layoutId, layout.keys, isCatFacing);
+    const atlas = getKeycapAtlas(layoutId, layout.keys, isCatFacing, theme);
 
     const sideInst = new THREE.InstancedMesh(this.capSideGeo, this.capSideMat, keyCount);
     sideInst.frustumCulled = false;
@@ -829,7 +844,7 @@ export class KeyboardAndMouse3D {
     topGeo.setAttribute('aUvRect', uvAttr);
     topGeo.setAttribute('aTint', tintAttr);
 
-    const topMat = createInstancedKeyTopMaterial(atlas.tex);
+    const topMat = createInstancedKeyTopMaterial(atlas.tex, theme);
     const topInst = new THREE.InstancedMesh(topGeo, topMat, keyCount);
     topInst.frustumCulled = false;
     this.boardDisposables.push(topGeo, topMat);
@@ -861,7 +876,7 @@ export class KeyboardAndMouse3D {
         spec.accent === 'orange' ? 'orange' : spec.accent === 'mod' ? 'mod' : 'base';
       sideInst.setColorAt(
         i,
-        accent === 'orange'
+        theme !== 'classic' ? this.tmpCol.set(keyFinish(theme, spec).side) : accent === 'orange'
           ? this.sideColorOrange
           : accent === 'mod'
             ? this.sideColorMod
@@ -869,15 +884,16 @@ export class KeyboardAndMouse3D {
       );
 
       const legendText = spec.id === 'space' ? '' : spec.id === 'esc' ? 'Esc' : spec.label;
-      const rect = atlas.rects.get(`${legendText}|${accent}`) ?? [0, 0, 0.1, 0.1];
+      const rect = atlas.rects.get(theme === 'classic' ? `${legendText}|${accent}` : spec.id) ?? [0, 0, 0.1, 0.1];
       uvRects[i * 4] = rect[0];
       uvRects[i * 4 + 1] = rect[1];
       uvRects[i * 4 + 2] = rect[2];
       uvRects[i * 4 + 3] = rect[3];
 
-      tints[i * 3] = 1;
-      tints[i * 3 + 1] = 1;
-      tints[i * 3 + 2] = 1;
+      const baseTint = Number(theme === 'classic');
+      tints[i * 3] = baseTint;
+      tints[i * 3 + 1] = baseTint;
+      tints[i * 3 + 2] = baseTint;
 
       this.keys.set(spec.id, {
         spec,
@@ -1020,6 +1036,7 @@ export class KeyboardAndMouse3D {
     rightDown: boolean,
     deskHopY: number,
     privacyAlpha: number,
+    ripple: KeyRipple | null = null,
   ): void {
     if (deskHopY !== this.lastDeskHopY) {
       this.deskGroup.position.y = deskHopY;
@@ -1055,7 +1072,8 @@ export class KeyboardAndMouse3D {
         this.topInstanced.setMatrixAt(k.index, this.tmpMat);
         matrixDirty = true;
 
-        this.tmpCol.copy(this.whiteColor).lerp(this.hitColor, k.glow * 0.90);
+        if (this.theme === 'classic') this.tmpCol.copy(this.whiteColor).lerp(this.hitColor, k.glow * .90);
+        else this.tmpCol.copy(this.keyGlow).multiplyScalar(k.glow * .82);
         const off = k.index * 3;
         this.topTintArray[off] = this.tmpCol.r;
         this.topTintArray[off + 1] = this.tmpCol.g;
@@ -1071,6 +1089,21 @@ export class KeyboardAndMouse3D {
         this.topTintAttr.needsUpdate = true;
       }
     }
+
+    const wave = this.theme === 'rgb' && ripple !== null && ripple.age <= 900;
+    if ((wave || this.hadRipple) && this.topTintAttr && this.topTintArray) {
+      for (const key of this.keys.values()) {
+        const spread = wave ? rippleAmount(key.spec, ripple) : 0;
+        const glow = Math.max(key.glow * .82, spread * .78);
+        this.tmpCol.copy(key.spec.uStart % 4 < 2 ? this.cyanWave : this.violetWave).multiplyScalar(glow);
+        const off = key.index * 3;
+        this.topTintArray[off] = this.tmpCol.r;
+        this.topTintArray[off + 1] = this.tmpCol.g;
+        this.topTintArray[off + 2] = this.tmpCol.b;
+      }
+      this.topTintAttr.needsUpdate = true;
+    }
+    this.hadRipple = wave;
 
     if (this.privacyPlate) {
       this.privacyPlate.visible = privacyAlpha > 0.02;

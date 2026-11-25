@@ -42,6 +42,13 @@ pub fn normalize_keyboard_orientation(raw: &str) -> String {
     }
 }
 
+pub fn normalize_keyboard_theme(raw: &str) -> String {
+    match raw {
+        "voyage" | "rgb" | "terminal" => raw.to_string(),
+        _ => "classic".to_string(),
+    }
+}
+
 pub fn normalize_cat_breed(raw: &str) -> String {
     let id = crate::cats::sanitize_cat_id(raw);
     if crate::cats::is_desktop_cat(&id) {
@@ -72,6 +79,12 @@ pub struct AppSettings {
     pub keyboard_layout: String,
     #[serde(default = "default_keyboard_orientation")]
     pub keyboard_orientation: String,
+    #[serde(default)]
+    pub keyboard_theme: String,
+    #[serde(default)]
+    pub weekday_sign: Option<bool>,
+    #[serde(default)]
+    pub blue_scarf: bool,
     #[serde(default, rename = "duorouEquipment3d")]
     pub duorou_equipment_3d: bool,
 }
@@ -92,6 +105,9 @@ impl Default for AppSettings {
             mcp_port: default_mcp_port(),
             keyboard_layout: default_keyboard_layout(),
             keyboard_orientation: default_keyboard_orientation(),
+            keyboard_theme: "classic".to_string(),
+            weekday_sign: None,
+            blue_scarf: false,
             duorou_equipment_3d: false,
         }
     }
@@ -133,6 +149,7 @@ pub fn load_settings() -> AppSettings {
         if let Ok(mut parsed) = serde_json::from_str::<AppSettings>(&content) {
             parsed.scale = parsed.scale.clamp(0.20, 1.50);
             parsed.cat_breed = normalize_cat_breed(&parsed.cat_breed);
+            parsed.keyboard_theme = normalize_keyboard_theme(&parsed.keyboard_theme);
             return parsed;
         }
     }

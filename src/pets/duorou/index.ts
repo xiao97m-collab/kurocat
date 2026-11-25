@@ -6,7 +6,6 @@ import { createDualPaws } from './dual-paws.js';
 import { createGazeController, pointerGaze } from './gaze-motion.js';
 import { createPortraitPainter } from './portrait.js';
 import { createWholeGaze } from './whole-gaze.js';
-import { createWeekdayLamp } from './weekday-lamp';
 import frames from './assets/frames.json';
 import videos from './assets/video-scenes.json';
 import heldKeys from './assets/held-paws.json';
@@ -79,7 +78,6 @@ export async function loadDuorou(engine: KuroCatEngine) {
   const reach = sceneCanvas(1);
   const restBody = sceneCanvas(2);
   const heldBody = sceneCanvas(2);
-  const drawWeekdayLamp = createWeekdayLamp();
   const [mouseX, mouseY] = frames.mousePosition;
   const mouseButtons = new Set<string>();
 
@@ -197,7 +195,8 @@ export async function loadDuorou(engine: KuroCatEngine) {
       const warmDown = down > .55 && y > .3 && !legacyUpper;
       const useRing = mouseProgress === 0 || (legacyUpper && needsLegacy) || warmDown;
       const image = gaze.draw(useRing ? x : 0, useRing ? y : 0, now);
-      const facingFront = gaze.pose().sourceFrames[0] === 0 && !gaze.pose().nod;
+      const gazePose = gaze.pose();
+      const facingFront = gazePose.sourceFrames[0] === 0 && !gazePose.nod;
       if (legacyUpper && !needsLegacy && facingFront) legacyUpper = false;
 
       const action = idleActions.step(now, idleSince, idle && facingFront, lastRest, !wantsSleep);
@@ -276,7 +275,7 @@ export async function loadDuorou(engine: KuroCatEngine) {
       engine.paintPetEquipment(ctx, 'mouse');
       ctx.restore();
 
-      drawWeekdayLamp(ctx, 297, 335, now);
+      engine.paintWeekdaySign(ctx, 295, 316, .84);
       if (dozeSince !== null && videos.rest.closed.includes(restFrame)) {
         drawSleepIndicator(ctx, 260, 98, now - dozeSince);
       }

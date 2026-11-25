@@ -112,12 +112,12 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "switch_cat",
-            "description": "Switch the active desktop pet to black or duorou.",
+            "description": "Switch the active desktop pet to black, duorou or corgi.",
             "inputSchema": {
                 "type": "object",
                 "required": ["id"],
                 "properties": {
-                    "id": { "type": "string", "enum": ["black", "duorou"] }
+                    "id": { "type": "string", "enum": ["black", "duorou", "corgi"] }
                 }
             }
         },
@@ -143,13 +143,16 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "update_settings",
-            "description": "Update KuroCat desktop pet settings live (scale 0.2-1.5, showKeyBubbles, soundEnabled, alwaysOnTop, clickThroughLocked, catBreed, keyboardLayout 65|108, keyboardOrientation cat|viewer, autostart).",
+            "description": "Update KuroCat desktop pet settings live (scale 0.2-1.5, showKeyBubbles, soundEnabled, alwaysOnTop, clickThroughLocked, catBreed, keyboardLayout 65|108, keyboardOrientation cat|viewer, keyboardTheme, weekdaySign, blueScarf, autostart).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "catBreed": { "type": "string", "enum": ["black", "duorou"] },
+                    "catBreed": { "type": "string", "enum": ["black", "duorou", "corgi"] },
                     "scale": { "type": "number", "minimum": 0.2, "maximum": 1.5 },
                     "keyboardLayout": { "type": "string", "enum": ["65", "108"] },
+                    "keyboardTheme": { "type": "string", "enum": ["classic", "voyage", "rgb", "terminal"] },
+                    "weekdaySign": { "type": ["boolean", "null"] },
+                    "blueScarf": { "type": "boolean" },
                     "keyboardOrientation": { "type": "string", "enum": ["cat", "viewer"] },
                     "showKeyBubbles": { "type": "boolean" },
                     "soundEnabled": { "type": "boolean" },
@@ -225,7 +228,7 @@ fn execute_tool(name: &str, args: &Value, on_change: &dyn Fn()) -> Value {
             };
             let id = sanitize_cat_id(id_raw);
             if !is_desktop_cat(&id) {
-                return err_text("Available desktop pets: black, duorou.");
+                return err_text("Available desktop pets: black, duorou, corgi.");
             }
             let mut s = load_settings();
             s.cat_breed = id.clone();
@@ -269,11 +272,20 @@ fn execute_tool(name: &str, args: &Value, on_change: &dyn Fn()) -> Value {
                 if is_desktop_cat(&clean) {
                     s.cat_breed = clean;
                 } else {
-                    return err_text("Available desktop pets: black, duorou.");
+                    return err_text("Available desktop pets: black, duorou, corgi.");
                 }
             }
             if let Some(scale) = args.get("scale").and_then(|v| v.as_f64()) {
                 s.scale = scale.clamp(0.20, 1.50);
+            }
+            if let Some(theme) = args.get("keyboardTheme").and_then(|v| v.as_str()) {
+                s.keyboard_theme = crate::config::normalize_keyboard_theme(theme);
+            }
+            if let Some(value) = args.get("weekdaySign") {
+                s.weekday_sign = value.as_bool();
+            }
+            if let Some(enabled) = args.get("blueScarf").and_then(|v| v.as_bool()) {
+                s.blue_scarf = enabled;
             }
             if let Some(layout) = args.get("keyboardLayout").and_then(|v| v.as_str()) {
                 s.keyboard_layout = crate::config::normalize_keyboard_layout(layout);

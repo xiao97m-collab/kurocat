@@ -118,7 +118,8 @@ body {
   gap: 6px;
 }
 
-.menu-scale-row[hidden] {
+.menu-scale-row[hidden],
+.menu-item[hidden] {
   display: none;
 }
 
@@ -258,6 +259,11 @@ body {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 5px;
+}
+
+.appearance-pills {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .kb-pill {

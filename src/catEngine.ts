@@ -8,9 +8,12 @@ import {
   resolveKeyByVk,
 } from './keyboardLayout';
 import { catAudio } from './audio';
+import { boardFinishes, keyFinish, paintVoyageMark, rippleAmount, type KeyboardTheme, type KeyRipple } from './keyboardTheme';
 import { resolveCustomSkin, type CatSkinConfig, type ResolvedSkin } from './catSkins';
 import type { PetEquipment3D } from './pets/duorou/equipment3d';
 import { drawSleepIndicator } from './pets/sleep-indicator';
+import { drawBlueScarf } from './pets/blue-scarf';
+import { createWeekdayLamp } from './pets/duorou/weekday-lamp';
 
 export const LOGICAL_W = 420;
 export const LOGICAL_H = 440;
@@ -121,10 +124,30 @@ export class KuroCatEngine {
   public customSkin: ResolvedSkin | null = null;
   public keyboardLayout: KeyboardLayoutId = '65';
   public keyboardOrientation: KeyboardOrientation = 'cat';
+  public keyboardTheme: KeyboardTheme = 'classic';
+  private lastKeyboardStrike: { key: KeySpec; at: number } | null = null;
+
+  private getKeyboardRipple(): KeyRipple | null {
+    const strike = this.lastKeyboardStrike;
+    return strike && this.keyboardTheme === 'rgb' ? { key: strike.key, age: this.lastTime - strike.at } : null;
+  }
   private renderScale = 1.0;
   private embedded = false;
   private petPainter: ((ctx: CanvasRenderingContext2D, now: number, sleepReady: boolean) => void) | null = null;
   private petEquipment3d: PetEquipment3D | null = null;
+
+  public petDecorations = { weekdaySign: false, blueScarf: false };
+  private weekdayLamp?: ReturnType<typeof createWeekdayLamp>;
+
+  public paintPetScarf(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height = 1): void {
+    if (this.petDecorations.blueScarf) drawBlueScarf(ctx, x, y, width, height);
+  }
+
+  public paintWeekdaySign(ctx: CanvasRenderingContext2D, x?: number, y?: number, scale = 1): void {
+    if (this.petDecorations.weekdaySign) {
+      (this.weekdayLamp ??= createWeekdayLamp())(ctx, x ?? this.kbCenterX + this.kbWidth * .5 - 9, y ?? this.kbCenterY - 67, this.lastTime, scale);
+    }
+  }
 
   public setPetPainter(painter: ((ctx: CanvasRenderingContext2D, now: number, sleepReady: boolean) => void) | null): void {
     if (painter !== this.petPainter) {
@@ -139,10 +162,10 @@ export class KuroCatEngine {
     this.petEquipment3d = equipment;
   }
 
-  public paintPetEquipment(ctx: CanvasRenderingContext2D, item: 'keyboard' | 'mouse'): void {
+  public paintPetEquipment(ctx: CanvasRenderingContext2D, item: 'keyboard' | 'mouse', keyBubbleLimit?: number): void {
     this.drawPetEquipment(ctx, item);
     if (!this.showKeyBubbles) return;
-    if (item === 'keyboard') this.drawKeyBubbles(ctx);
+    if (item === 'keyboard') this.drawKeyBubbles(ctx, keyBubbleLimit);
     else this.drawMouseBadges(ctx);
   }
 
@@ -156,9 +179,9 @@ export class KuroCatEngine {
 
     equipment.configure(this.keyboardLayout, this.keyboardOrientation,
       this.kbWidth - KEY_GRID_PAD_X * 2, this.kbHeight - KEY_GRID_PAD_Y * 2,
-      KEY_GRID_BACK_SCALE, KEY_GRID_TAPER, MOUSE_RADIUS_X * 2, MOUSE_RADIUS_Y * 2);
+      KEY_GRID_BACK_SCALE, KEY_GRID_TAPER, MOUSE_RADIUS_X * 2, MOUSE_RADIUS_Y * 2, this.keyboardTheme);
     equipment.update(this.lastTime, this.keyAnims, this.mouseLeftPress > 0.2, this.mouseRightPress > 0.2,
-      Math.max(this.mouseScrollFlash, this.mouseMiddlePress), this.tailStrike?.keyId, this.tailStrike?.pressure);
+      Math.max(this.mouseScrollFlash, this.mouseMiddlePress), this.tailStrike?.keyId, this.tailStrike?.pressure, this.getKeyboardRipple());
     ctx.save();
     if (item === 'keyboard') {
       ctx.translate(this.kbCenterX, this.kbCenterY + this.kbBounce * 1.1);
@@ -173,6 +196,10 @@ export class KuroCatEngine {
 
   public getPetMouse(): { base: [number, number]; offset: [number, number] } {
     return { base: [this.mouseBaseX, this.mouseBaseY], offset: [this.mouseOffsetX, this.mouseOffsetY] };
+  }
+
+  public getPetKeyTarget(spec: KeySpec): Vec2 {
+    return this.getKeyWorldCenter(spec);
   }
 
   public showPetKeyContact(keyId: string): void {
@@ -469,6 +496,7 @@ export class KuroCatEngine {
 
     if (repeat) return;
 
+    this.lastKeyboardStrike = { key: spec, at: now };
     this.lastAnyKeyAt = now;
     const isTypingKey = !MODIFIER_KEYS.has(spec.id);
     if (isTypingKey) {
@@ -1160,6 +1188,7 @@ export class KuroCatEngine {
     // Layer 4: True-scale velvety cat paws (tapered idle legs / planted diagonal mouse support leg / bent curled chest paw / plump round poking paw!)
     this.drawPaw(ctx, this.leftPaw, breath);
     this.drawPaw(ctx, this.rightPaw, breath);
+    this.paintWeekdaySign(ctx, undefined, undefined, .80);
 
     if (this.sleepStartedAt !== null && this.sleepDepth > .85) {
       const head = this.spinePoint(.1, breath);
@@ -1695,6 +1724,7 @@ export class KuroCatEngine {
 
     // 6) Expressive eyes (lemon-chartreuse for Black Cat / luminous sapphire-blue for Ragdoll!)
     this.drawEyes(ctx, wShift, -1);
+    this.paintPetScarf(ctx, 0, 45, 109, .84);
 
     ctx.restore(); // end head
 
@@ -1953,6 +1983,9 @@ export class KuroCatEngine {
 
   private drawKeyboard(ctx: CanvasRenderingContext2D): void {
     const layout = getKeyboardLayout(this.keyboardLayout);
+    const theme = this.keyboardTheme;
+    const finish = boardFinishes[theme];
+    const ripple = this.getKeyboardRipple();
     const isCatFacing = this.keyboardOrientation === 'cat';
     const is108 = this.keyboardLayout === '108';
     const innerW = this.kbWidth - KEY_GRID_PAD_X * 2;
@@ -1977,17 +2010,27 @@ export class KuroCatEngine {
     ctx.fill();
     ctx.restore();
 
-    ctx.fillStyle = '#24262c';
-    ctx.strokeStyle = '#363840';
+    ctx.fillStyle = finish.shell;
+    ctx.strokeStyle = finish.edge;
     ctx.lineWidth = 1.1;
     this.trapezoidPath(ctx, topHalfW, botHalfW, -halfH, halfH, 6.5);
     ctx.fill();
     ctx.stroke();
 
     // Bright clean light-grey inner keybed matching ORIG 0.3s bright airy white keyboard!
-    ctx.fillStyle = '#d4d6d1';
+    ctx.fillStyle = finish.plate;
     this.trapezoidPath(ctx, topHalfW - 5, botHalfW - 5, -halfH + 4, halfH - 4, 3.5);
     ctx.fill();
+
+    if (theme === 'rgb') {
+      const rail = ctx.createLinearGradient(-topHalfW, 0, topHalfW, 0);
+      rail.addColorStop(0, '#8147e0');
+      rail.addColorStop(.47, '#46cffe');
+      rail.addColorStop(1, '#5169ff');
+      ctx.fillStyle = rail;
+      this.roundRect(ctx, -topHalfW + 12, halfH + 1, topHalfW * 2 - 24, 2, 1);
+      ctx.fill();
+    }
 
     const rowH = innerH / layout.totalRows;
     const unitW = innerW / layout.totalUnits;
@@ -2015,25 +2058,17 @@ export class KuroCatEngine {
       const y = -innerH / 2 + screenRowTop * rowH + gap * 0.5 + press * 2.0 + tailPressure * 1.1;
       const h = rSpan * rowH - gap - 0.8;
 
-      let topColor = '#f8f8f5';
-      let sideColor = '#d0d2cc';
-      if (press > 0.14) {
-        topColor = this.customSkin
-          ? this.customSkin.accentColor
-          : this.catBreed === 'ragdoll'
-            ? '#7ac7ff'
-            : '#d2f244';
-        sideColor = this.customSkin
-          ? this.customSkin.accentSideColor
-          : this.catBreed === 'ragdoll'
-            ? '#4690d8'
-            : '#8cb014';
-      } else if (key.accent === 'orange') {
-        topColor = '#f4a524';
-        sideColor = '#c27a10';
-      } else if (key.accent === 'mod') {
-        topColor = '#efefeb';
-        sideColor = '#c7c9c3';
+      const keycap = keyFinish(theme, key);
+      const wave = rippleAmount(key, ripple);
+      let topColor = keycap.top;
+      let sideColor = keycap.side;
+      let ink = keycap.ink;
+      if (press > .14) {
+        topColor = theme === 'rgb' ? '#76e4fb' : theme === 'voyage' ? '#e6bb63' : theme === 'terminal' ? '#ffad66'
+          : this.customSkin?.accentColor ?? (this.catBreed === 'ragdoll' ? '#7ac7ff' : '#d2f244');
+        sideColor = theme === 'rgb' ? '#2f9dd0' : theme === 'voyage' ? '#9d743f' : theme === 'terminal' ? '#9f562e'
+          : this.customSkin?.accentSideColor ?? (this.catBreed === 'ragdoll' ? '#4690d8' : '#8cb014');
+        ink = '#171c25';
       }
 
       ctx.fillStyle = sideColor;
@@ -2044,9 +2079,21 @@ export class KuroCatEngine {
       this.roundRect(ctx, x, y, w, h - 0.9, 1.8);
       ctx.fill();
 
+      if (wave > .012 && press <= .14) {
+        ctx.save();
+        ctx.globalAlpha = wave * .84;
+        ctx.fillStyle = screenUStart % 4 < 2 ? '#47c7f5' : '#9573ff';
+        ctx.shadowColor = ctx.fillStyle;
+        ctx.shadowBlur = wave * 7;
+        this.roundRect(ctx, x + .7, y + .45, w - 1.4, h - 1.8, 1.35);
+        ctx.fill();
+        ctx.restore();
+      }
+
       // Keycap legends: rotated 180° in cat-facing mode, upright 0° in viewer-facing mode!
       const legend = key.id === 'space' ? '' : key.id === 'esc' ? 'Esc' : key.label;
-      if (legend) {
+      const voyageMark = theme === 'voyage';
+      if (legend || voyageMark) {
         const isWideWord = legend.length >= 3;
         const fontSize = is108
           ? isWideWord
@@ -2064,15 +2111,12 @@ export class KuroCatEngine {
         if (isCatFacing) {
           ctx.rotate(Math.PI);
         }
-        ctx.font = `700 ${fontSize}px "Segoe UI", system-ui, sans-serif`;
-        ctx.fillStyle = press > 0.14
-          ? '#111214'
-          : key.accent === 'orange'
-            ? '#ffffff'
-            : '#2c2f36';
+        ctx.font = `700 ${voyageMark && key.id === 'esc' ? fontSize * .84 : fontSize}px "Segoe UI", system-ui, sans-serif`;
+        ctx.fillStyle = ink;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(legend, 0, 0);
+        if (legend) ctx.fillText(legend, voyageMark && ['esc', 'enter'].includes(key.id) ? w * .15 : 0, 0);
+        if (voyageMark) paintVoyageMark(ctx, key, legend ? -w * .32 : 0, 0, key.id === 'space' ? 7 : Math.min(w, h) * .43, ink);
         ctx.restore();
       }
     }
@@ -2462,10 +2506,11 @@ export class KuroCatEngine {
     }
   }
 
-  private drawKeyBubbles(ctx: CanvasRenderingContext2D): void {
+  private drawKeyBubbles(ctx: CanvasRenderingContext2D, limit = this.bubbles.length): void {
     const now = performance.now();
 
-    for (const b of this.bubbles) {
+    for (let i = Math.max(0, this.bubbles.length - limit); i < this.bubbles.length; i++) {
+      const b = this.bubbles[i];
       const age = now - b.createdAt;
       const t = Math.min(1, age / b.lifetime);
 

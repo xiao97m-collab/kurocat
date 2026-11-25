@@ -420,13 +420,21 @@ pub fn builtin_cats() -> Vec<CatSkinConfig> {
     duorou.emoji = Some("🐶".to_string());
     duorou.accent_color = Some("#e6cea6".to_string());
     cats.push(duorou);
+    let mut corgi = cats[0].clone();
+    corgi.id = CORGI_ID.to_string();
+    corgi.name = "奶油柯基".to_string();
+    corgi.emoji = Some("🐶".to_string());
+    corgi.fur_color = "#edb583".to_string();
+    corgi.accent_color = Some("#edbc89".to_string());
+    cats.push(corgi);
     cats
 }
 
 pub const DUOROU_ID: &str = "duorou";
+pub const CORGI_ID: &str = "corgi";
 
 pub fn is_desktop_cat(id: &str) -> bool {
-    matches!(id, "black" | DUOROU_ID)
+    matches!(id, "black" | DUOROU_ID | CORGI_ID)
 }
 
 pub fn desktop_cats() -> Vec<CatSkinConfig> {
@@ -463,7 +471,7 @@ pub fn all_cats() -> Vec<CatSkinConfig> {
     let mut list = builtin_cats();
     let custom = load_custom_cats();
     for c in custom {
-        if c.id == DUOROU_ID {
+        if matches!(c.id.as_str(), DUOROU_ID | CORGI_ID) {
             continue;
         }
         if let Some(existing) = list.iter_mut().find(|x| x.id == c.id) {
@@ -480,8 +488,8 @@ pub fn all_cats() -> Vec<CatSkinConfig> {
 
 pub fn upsert_custom_cat(mut cat: CatSkinConfig) -> Result<CatSkinConfig, String> {
     cat.id = sanitize_cat_id(&cat.id);
-    if cat.id == DUOROU_ID {
-        return Err("多肉使用内置视频动作素材".to_string());
+    if matches!(cat.id.as_str(), DUOROU_ID | CORGI_ID) {
+        return Err("该角色使用内置动作素材".to_string());
     }
     if cat.name.trim().is_empty() {
         cat.name = cat.id.clone();
@@ -517,7 +525,7 @@ pub fn cat_exists(id: &str) -> bool {
 
 pub fn cat_schema_guide() -> serde_json::Value {
     serde_json::json!({
-        "description": "KuroCat Custom Cat Skin Schema. Pass custom cat JSON to upsert_cat to save a skin. Available desktop pets are black and duorou.",
+        "description": "KuroCat Custom Cat Skin Schema. Pass custom cat JSON to upsert_cat to save a skin. Available desktop pets are black, duorou and corgi.",
         "patterns": {
             "solid": "Single coat color (e.g., British Shorthair blue, white Persian, golden chinchilla, black cat)",
             "bicolor": "Ragdoll / bicolor inverted-V face mask (uses maskColor, foreheadBridgeColor, flankColor)",

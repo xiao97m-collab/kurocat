@@ -1,6 +1,7 @@
 import { type Camera, OrthographicCamera, PerspectiveCamera, Scene, Vector2, Vector3, WebGLRenderer } from 'three';
 import type { KeyboardLayoutId } from '../../keyboardLayout';
 import type { KeyboardOrientation } from '../../catEngine';
+import type { KeyboardTheme, KeyRipple } from '../../keyboardTheme';
 import { KeyboardAndMouse3D } from './keyboard3d';
 
 const renderWidth = 472;
@@ -32,6 +33,7 @@ export class PetEquipment3D {
       renderHeight / (2 * pixelsPerUnit), -renderHeight / (2 * pixelsPerUnit), 0.1, 20),
     90, 94,
   );
+  private theme: KeyboardTheme = 'classic';
   private gridWidth = 0;
   private gridHeight = 0;
   private keyboardOffsetY = 0;
@@ -59,13 +61,14 @@ export class PetEquipment3D {
   }
 
   configure(layout: KeyboardLayoutId, orientation: KeyboardOrientation, gridWidth: number, gridHeight: number,
-    backScale: number, taper: number, mouseWidth: number, mouseHeight: number): void {
+    backScale: number, taper: number, mouseWidth: number, mouseHeight: number, theme: KeyboardTheme): void {
     if (this.gridWidth === gridWidth && this.gridHeight === gridHeight &&
-        this.desk.getLayoutId() === layout && this.desk.getOrientation() === orientation) return;
+        this.desk.getLayoutId() === layout && this.desk.getOrientation() === orientation && this.theme === theme) return;
 
     this.gridWidth = gridWidth;
     this.gridHeight = gridHeight;
-    this.desk.rebuildBoard(layout, orientation);
+    this.theme = theme;
+    this.desk.rebuildBoard(layout, orientation, theme);
 
     const grid = this.desk.keyGrid();
     const camera = this.keyboard.camera;
@@ -103,7 +106,7 @@ export class PetEquipment3D {
   }
 
   update(now: number, keys: ReadonlyMap<string, { pressAmount: number }>, left: boolean, right: boolean, scroll: number,
-    tailKey?: string, tailPressure = 0): void {
+    tailKey?: string, tailPressure = 0, ripple: KeyRipple | null = null): void {
     if (now === this.lastTime) return;
     const dt = this.lastTime === null ? 1 / 60 : Math.max(0, Math.min(0.034, (now - this.lastTime) / 1000));
     this.lastTime = now;
@@ -126,7 +129,7 @@ export class PetEquipment3D {
     this.rightDown = right;
     this.scrollFlash = scroll;
 
-    this.desk.update(dt, left, right, 0, 0);
+    this.desk.update(dt, left, right, 0, 0, ripple);
     if (this.keyboardAnimation > 0) {
       this.desk.boardGroup.visible = true;
       this.desk.mouseGroup.visible = false;
