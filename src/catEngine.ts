@@ -134,6 +134,7 @@ export class KuroCatEngine {
   private renderScale = 1.0;
   private embedded = false;
   private petPainter: ((ctx: CanvasRenderingContext2D, now: number, sleepReady: boolean) => void) | null = null;
+  private landingPainter: ((ctx: CanvasRenderingContext2D, now: number) => boolean) | null = null;
   private petEquipment3d: PetEquipment3D | null = null;
 
   public petDecorations = { weekdaySign: false, blueScarf: false };
@@ -160,6 +161,37 @@ export class KuroCatEngine {
 
   public setPetEquipment3d(equipment: PetEquipment3D | null): void {
     this.petEquipment3d = equipment;
+  }
+
+  public setLandingPainter(painter: (ctx: CanvasRenderingContext2D, now: number) => boolean): void {
+    this.landingPainter = painter;
+  }
+
+  public paintLandingEquipment(
+    ctx: CanvasRenderingContext2D,
+    item: 'keyboard' | 'mouse',
+    offset: { x: number; y: number; angle: number; mousePressed?: boolean },
+  ): void {
+    const keyboard = item === 'keyboard';
+    const x = keyboard ? this.kbCenterX : this.mouseBaseX + this.mouseOffsetX;
+    const halfWidth = keyboard ? this.kbWidth * .52 : MOUSE_RADIUS_X;
+    const bottom = keyboard
+      ? this.kbCenterY + this.kbHeight / 2 + this.kbBounce * 1.1
+      : this.mouseBaseY + this.mouseOffsetY + MOUSE_RADIUS_Y;
+    const edgeLift = Math.abs(Math.sin(offset.angle)) * halfWidth;
+    const previousPress = this.mouseLeftPress;
+    ctx.save();
+    ctx.translate(x + offset.x, bottom + offset.y - edgeLift);
+    ctx.rotate(offset.angle);
+    ctx.translate(-x, -bottom);
+    try {
+      if (offset.mousePressed) this.mouseLeftPress = 1;
+      this.drawPetEquipment(ctx, item);
+      if (keyboard) this.paintWeekdaySign(ctx, undefined, undefined, .80);
+    } finally {
+      this.mouseLeftPress = previousPress;
+      ctx.restore();
+    }
   }
 
   public paintPetEquipment(ctx: CanvasRenderingContext2D, item: 'keyboard' | 'mouse', keyBubbleLimit?: number): void {
@@ -1163,6 +1195,14 @@ export class KuroCatEngine {
       const offsetY = ch - drawH;
       ctx.translate(offsetX, offsetY);
       ctx.scale(uniformScale, uniformScale);
+    }
+
+    if (this.landingPainter) {
+      if (this.landingPainter(ctx, this.lastTime)) {
+        ctx.restore();
+        return;
+      }
+      this.landingPainter = null;
     }
 
     if (this.petPainter) {

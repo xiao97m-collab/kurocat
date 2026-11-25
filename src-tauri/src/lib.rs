@@ -5,6 +5,8 @@ mod config;
 mod input_hook;
 mod mcp;
 mod tray;
+#[cfg(target_os = "macos")]
+mod typing_follow;
 mod updater;
 
 use cats::{cats_path, desktop_cats, CatSkinConfig, CORGI_ID, DUOROU_ID};
@@ -86,6 +88,8 @@ pub struct AppState {
     pub mcp_enabled: Arc<AtomicBool>,
     pub update_banner_open: Arc<AtomicBool>,
     pub paused_guard: Arc<AtomicBool>,
+    #[cfg(target_os = "macos")]
+    typing_anchor: Mutex<Option<typing_follow::Anchor>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -146,6 +150,10 @@ fn update_settings(app: AppHandle, state: State<'_, AppState>, mut patch: AppSet
     }
 
     state.mcp_enabled.store(patch.mcp_enabled, Ordering::Relaxed);
+    #[cfg(target_os = "macos")]
+    if !patch.follow_typing {
+        *state.typing_anchor.lock().unwrap() = None;
+    }
 
     let layout = pet_keyboard_layout(&patch);
     let size_changed = (patch.scale - prev_scale).abs() > 0.005 || layout != prev_layout;
@@ -227,6 +235,19 @@ fn reset_position(app: AppHandle) {
 }
 
 #[tauri::command]
+async fn typing_follow_target(app: AppHandle, move_window: bool) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        typing_follow::target(app, move_window).await
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, move_window);
+        false
+    }
+}
+
+#[tauri::command]
 fn create_desktop_shortcut() -> Result<String, String> {
     config::create_desktop_shortcut()
 }
@@ -259,10 +280,16 @@ pub fn reload_and_emit_all(app: &AppHandle) {
     state
         .mcp_enabled
         .store(disk_settings.mcp_enabled, Ordering::Relaxed);
+    #[cfg(target_os = "macos")]
+    if !disk_settings.follow_typing {
+        *state.typing_anchor.lock().unwrap() = None;
+    }
 
     if let Some(win) = app.get_webview_window("main") {
         if top_changed {
             let _ = win.set_always_on_top(disk_settings.always_on_top);
+            #[cfg(target_os = "macos")]
+            configure_macos_fullscreen_overlay(&win, disk_settings.always_on_top);
         }
         if size_changed {
             let _ = resize_window_anchored_bottom_right(
@@ -497,38 +524,34 @@ fn win_gentle_reassert_topmost(win: &tauri::WebviewWindow) {
 
 #[cfg(target_os = "macos")]
 pub fn configure_macos_fullscreen_overlay(win: &tauri::WebviewWindow, always_on_top: bool) {
-    use std::ffi::{c_char, c_void};
-    #[link(name = "objc")]
-    extern "C" {
-        fn sel_registerName(name: *const c_char) -> *mut c_void;
-        fn objc_msgSend();
-    }
-    if let Ok(raw_ns_win) = win.ns_window() {
-        if raw_ns_win.is_null() {
-            return;
-        }
-        unsafe {
-            let sel_get_behavior =
-                sel_registerName(b"collectionBehavior\0".as_ptr() as *const c_char);
-            let sel_set_behavior =
-                sel_registerName(b"setCollectionBehavior:\0".as_ptr() as *const c_char);
-            let sel_set_level = sel_registerName(b"setLevel:\0".as_ptr() as *const c_char);
+    use objc2_app_kit::{
+        NSNormalWindowLevel, NSStatusWindowLevel, NSWindow, NSWindowCollectionBehavior as Behavior,
+    };
+    use objc2_foundation::NSProcessInfo;
 
-            let get_fn: extern "C" fn(*mut c_void, *mut c_void) -> usize =
-                std::mem::transmute(objc_msgSend as *const ());
-            let set_usize_fn: extern "C" fn(*mut c_void, *mut c_void, usize) =
-                std::mem::transmute(objc_msgSend as *const ());
-            let set_isize_fn: extern "C" fn(*mut c_void, *mut c_void, isize) =
-                std::mem::transmute(objc_msgSend as *const ());
-
-            let cur = get_fn(raw_ns_win, sel_get_behavior);
-            // CanJoinAllSpaces (1 << 0) | Stationary (1 << 4) | FullScreenAuxiliary (1 << 8)
-            let next = cur | (1 << 0) | (1 << 4) | (1 << 8);
-            set_usize_fn(raw_ns_win, sel_set_behavior, next);
-            // NSStatusWindowLevel = 25 (floats above native fullscreen apps/games), Normal = 0
-            set_isize_fn(raw_ns_win, sel_set_level, if always_on_top { 25 } else { 0 });
+    let window = win.clone();
+    let _ = win.run_on_main_thread(move || {
+        let Ok(raw) = window.ns_window() else { return };
+        // Tauri owns the NSWindow. AppKit calls stay on the main thread.
+        let Some(native) = (unsafe { raw.cast::<NSWindow>().as_ref() }) else { return };
+        let mut behavior = native.collectionBehavior();
+        let overlay = Behavior::CanJoinAllSpaces | Behavior::Stationary | Behavior::FullScreenAuxiliary;
+        if always_on_top {
+            behavior.remove(
+                Behavior::MoveToActiveSpace | Behavior::FullScreenPrimary | Behavior::FullScreenNone
+                    | Behavior::Managed | Behavior::Transient,
+            );
+            behavior.insert(overlay);
+            if NSProcessInfo::processInfo().operatingSystemVersion().majorVersion >= 13 {
+                behavior.remove(Behavior::Primary | Behavior::Auxiliary);
+                behavior.insert(Behavior::CanJoinAllApplications);
+            }
+        } else {
+            behavior.remove(overlay | Behavior::CanJoinAllApplications);
         }
-    }
+        native.setCollectionBehavior(behavior);
+        native.setLevel(if always_on_top { NSStatusWindowLevel } else { NSNormalWindowLevel });
+    });
 }
 
 fn is_over_interactive_silhouette(rx: f64, ry: f64, is_108: bool) -> (bool, bool) {
@@ -773,6 +796,8 @@ pub fn run() {
             mcp_enabled,
             update_banner_open,
             paused_guard,
+            #[cfg(target_os = "macos")]
+            typing_anchor: Mutex::new(None),
         })
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -787,7 +812,6 @@ pub fn run() {
                 let _ = win.set_always_on_top(s.always_on_top);
                 #[cfg(target_os = "macos")]
                 {
-                    let _ = win.set_visible_on_all_workspaces(true);
                     configure_macos_fullscreen_overlay(&win, s.always_on_top);
                 }
                 let (win_w, win_h) = window_dimensions(pet_keyboard_layout(&s), s.scale);
@@ -865,6 +889,7 @@ pub fn run() {
             set_update_banner_open,
             save_window_pos,
             reset_position,
+            typing_follow_target,
             create_desktop_shortcut,
             check_for_update,
             install_update,

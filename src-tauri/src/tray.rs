@@ -45,7 +45,7 @@ pub fn setup_tray(app: &AppHandle, initial: &AppSettings) -> tauri::Result<()> {
     let always_on_top = CheckMenuItem::with_id(
         app,
         "always_on_top",
-        "始终置顶显示",
+        if cfg!(target_os = "macos") { "始终置顶（含全屏）" } else { "始终置顶显示" },
         true,
         initial.always_on_top,
         None::<&str>,

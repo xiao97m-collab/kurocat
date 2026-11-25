@@ -66,6 +66,8 @@ pub struct AppSettings {
     pub scale: f64,
     pub always_on_top: bool,
     pub click_through_locked: bool,
+    #[serde(default)]
+    pub follow_typing: bool,
     pub show_key_bubbles: bool,
     pub sound_enabled: bool,
     pub autostart: bool,
@@ -97,6 +99,7 @@ impl Default for AppSettings {
             scale: 1.0,
             always_on_top: true,
             click_through_locked: false,
+            follow_typing: false,
             show_key_bubbles: true,
             sound_enabled: true,
             autostart: false,

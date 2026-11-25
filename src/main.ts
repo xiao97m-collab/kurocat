@@ -9,8 +9,10 @@ import type { KeyboardLayoutId } from './keyboardLayout';
 import { isKeyboardTheme, type KeyboardTheme } from './keyboardTheme';
 import type { loadDuorou } from './pets/duorou';
 import type { PetEquipment3D } from './pets/duorou/equipment3d';
+import { createLandingPainter, isLandingBreed, loadLandingAtlas } from './pets/landing-motion';
 
 const duorouId = 'duorou';
+const isMac = /Mac/i.test(navigator.platform) || /Macintosh/i.test(navigator.userAgent);
 
 interface AppSettings {
   x: number | null;
@@ -18,6 +20,7 @@ interface AppSettings {
   scale: number;
   alwaysOnTop: boolean;
   clickThroughLocked: boolean;
+  followTyping: boolean;
   showKeyBubbles: boolean;
   soundEnabled: boolean;
   autostart: boolean;
@@ -82,6 +85,7 @@ let settings: AppSettings = {
   scale: 1,
   alwaysOnTop: true,
   clickThroughLocked: false,
+  followTyping: false,
   showKeyBubbles: true,
   soundEnabled: true,
   autostart: false,
@@ -100,6 +104,7 @@ let catList: CatSkinConfig[] = [...DEFAULT_BUILTIN_CATS];
 
 const canvas = document.getElementById('pet-canvas') as HTMLCanvasElement;
 const menuEl = document.getElementById('context-menu') as HTMLDivElement;
+const typingFollowButton = menuEl.querySelector<HTMLButtonElement>('[data-action="toggle-typing-follow"]')!;
 const breedPillsEl = document.getElementById('breed-pills') as HTMLDivElement;
 const keyboardLayoutEl = document.getElementById('keyboard-layout-options') as HTMLDivElement;
 const scarfButton = menuEl.querySelector<HTMLButtonElement>('[data-action="toggle-scarf"]')!;
@@ -205,6 +210,7 @@ function syncMenuUI(): void {
   setCheck('chk-lock', settings.clickThroughLocked);
   setCheck('chk-sound', settings.soundEnabled);
   setCheck('chk-top', settings.alwaysOnTop);
+  setCheck('chk-typing-follow', settings.followTyping);
   setCheck('chk-autostart', settings.autostart);
   setCheck('chk-mcp', settings.mcpEnabled);
   const weekdaySign = settings.weekdaySign ?? settings.catBreed === duorouId;
@@ -472,11 +478,78 @@ async function triggerManualUpdateCheck(): Promise<void> {
   }
 }
 
+const shortcutModifiers = new Set([0x5b, 0x5c, 0xa2, 0xa3]);
+const heldShortcutModifiers = new Set<number>();
+let typingProbeAfter = 0;
+let typingTransition = false;
+let landingKeys: number[] | null = null;
+
+function isTypingKey(vk: number): boolean {
+  return (vk >= 0x30 && vk <= 0x39) || (vk >= 0x41 && vk <= 0x5a)
+    || (vk >= 0x60 && vk <= 0x6f) || (vk >= 0xba && vk <= 0xc0)
+    || (vk >= 0xdb && vk <= 0xde) || vk === 0x20 || vk === 0x08;
+}
+
+function canFollowTyping(): boolean {
+  return isMac && settings.followTyping && heldShortcutModifiers.size === 0
+    && menuEl.classList.contains('hidden') && updateToastEl.classList.contains('hidden')
+    && !canvas.classList.contains('pet-dragging');
+}
+
+async function followTyping(vk: number): Promise<void> {
+  const now = performance.now();
+  if (!isTypingKey(vk) || !canFollowTyping() || typingTransition || now < typingProbeAfter) return;
+  typingProbeAfter = now + 300;
+  typingTransition = true;
+  const breed = settings.catBreed;
+  const layout = engine.keyboardLayout;
+  const keys = [vk];
+  landingKeys = isLandingBreed(breed) ? keys : null;
+  let fadeOut: Animation | undefined;
+  let fadeIn: Animation | undefined;
+  try {
+    if (!await invoke<boolean>('typing_follow_target', { moveWindow: false }) || !canFollowTyping()) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      await invoke('typing_follow_target', { moveWindow: true });
+      return;
+    }
+    const prepared = isLandingBreed(breed) ? loadLandingAtlas(breed, layout).catch(error => {
+      console.debug('Could not load landing animation:', error);
+      return null;
+    }) : null;
+    fadeOut = canvas.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 100, fill: 'forwards' });
+    await fadeOut.finished;
+    const moved = canFollowTyping() && await invoke<boolean>('typing_follow_target', { moveWindow: true });
+    const atlas = moved && await prepared;
+    const valid = () => settings.followTyping && settings.catBreed === breed
+      && engine.keyboardLayout === layout && !canvas.classList.contains('pet-dragging');
+    if (atlas && isLandingBreed(breed) && valid()) {
+      const reveal = () => fadeOut?.cancel();
+      await new Promise<void>(done => {
+        engine.setLandingPainter(createLandingPainter(engine, atlas, breed, keys, valid, reveal, done));
+      });
+      return;
+    }
+    fadeIn = canvas.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 140 });
+    fadeOut.cancel();
+    await fadeIn.finished;
+  } catch (error) {
+    console.debug('Could not follow active input:', error);
+  } finally {
+    landingKeys = null;
+    fadeOut?.cancel();
+    fadeIn?.cancel();
+    typingTransition = false;
+  }
+}
+
 async function bootstrap(): Promise<void> {
   engine.start();
 
   // Hide Windows-only desktop shortcut button on macOS
-  if (/Mac/i.test(navigator.platform) || /Macintosh/i.test(navigator.userAgent)) {
+  if (isMac) {
+    typingFollowButton.hidden = false;
+    menuEl.querySelector('[data-action="toggle-top"] > span')!.textContent = '始终置顶（含全屏）';
     const shortcutBtn = document.getElementById('btn-desktop-shortcut');
     if (shortcutBtn) shortcutBtn.style.display = 'none';
   }
@@ -581,9 +654,15 @@ async function bootstrap(): Promise<void> {
       case 'keyDown':
         engine.onKeyDown(p.vk, p.repeat);
         activePet?.keyDown(p.vk, p.repeat, performance.now());
+        if (shortcutModifiers.has(p.vk)) heldShortcutModifiers.add(p.vk);
+        else if (!p.repeat && isTypingKey(p.vk)) {
+          if (landingKeys && canFollowTyping() && landingKeys.length < 40) landingKeys.push(p.vk);
+          else void followTyping(p.vk);
+        }
         break;
       case 'keyUp':
         engine.onKeyUp(p.vk);
+        heldShortcutModifiers.delete(p.vk);
         break;
       case 'mouseMove':
         if (activePet && 'mouseMove' in activePet) {
@@ -711,6 +790,10 @@ async function bootstrap(): Promise<void> {
         break;
       case 'toggle-top':
         void applySettingsPatch({ alwaysOnTop: !settings.alwaysOnTop });
+        break;
+      case 'toggle-typing-follow':
+        void applySettingsPatch({ followTyping: !settings.followTyping });
+        closeContextMenu();
         break;
       case 'toggle-autostart':
         void applySettingsPatch({ autostart: !settings.autostart });

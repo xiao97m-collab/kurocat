@@ -1,6 +1,6 @@
 [package]
 name = "kuro-cat-pet"
-version = "1.2.0"
+version = "1.2.1"
 description = "Cross-platform desktop cat typing & mouse companion for Windows and macOS"
 authors = ["Kevin Hao"]
 edition = "2021"
@@ -24,6 +24,11 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSScreen", "NSWindow"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSGeometry", "NSProcessInfo"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
