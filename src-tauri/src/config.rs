@@ -49,6 +49,15 @@ pub fn normalize_keyboard_theme(raw: &str) -> String {
     }
 }
 
+pub fn normalize_pet_skin(raw: &str) -> Option<String> {
+    match raw {
+        "plain" | "classic" | "explorer" | "magic" | "winter" | "sakura" | "summer" => {
+            Some(raw.to_string())
+        }
+        _ => None,
+    }
+}
+
 pub fn normalize_cat_breed(raw: &str) -> String {
     let id = crate::cats::sanitize_cat_id(raw);
     if crate::cats::is_desktop_cat(&id) {
@@ -87,6 +96,8 @@ pub struct AppSettings {
     pub weekday_sign: Option<bool>,
     #[serde(default)]
     pub blue_scarf: bool,
+    #[serde(default)]
+    pub pet_skin: Option<String>,
     #[serde(default, rename = "duorouEquipment3d")]
     pub duorou_equipment_3d: bool,
 }
@@ -111,6 +122,7 @@ impl Default for AppSettings {
             keyboard_theme: "classic".to_string(),
             weekday_sign: None,
             blue_scarf: false,
+            pet_skin: None,
             duorou_equipment_3d: false,
         }
     }
@@ -153,6 +165,7 @@ pub fn load_settings() -> AppSettings {
             parsed.scale = parsed.scale.clamp(0.20, 1.50);
             parsed.cat_breed = normalize_cat_breed(&parsed.cat_breed);
             parsed.keyboard_theme = normalize_keyboard_theme(&parsed.keyboard_theme);
+            parsed.pet_skin = parsed.pet_skin.as_deref().and_then(normalize_pet_skin);
             return parsed;
         }
     }

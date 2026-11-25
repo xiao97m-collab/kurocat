@@ -9,6 +9,7 @@ import type { KeyboardLayoutId } from './keyboardLayout';
 import { isKeyboardTheme, type KeyboardTheme } from './keyboardTheme';
 import type { loadDuorou } from './pets/duorou';
 import type { PetEquipment3D } from './pets/duorou/equipment3d';
+import { isPetSkin, supportsWardrobe, type PetSkin } from './pets/wardrobe';
 import { createLandingPainter, isLandingBreed, loadLandingAtlas } from './pets/landing-motion';
 
 const duorouId = 'duorou';
@@ -32,6 +33,7 @@ interface AppSettings {
   keyboardTheme: KeyboardTheme;
   weekdaySign: boolean | null;
   blueScarf: boolean;
+  petSkin: PetSkin | null;
   duorouEquipment3d: boolean;
 }
 
@@ -97,6 +99,7 @@ let settings: AppSettings = {
   keyboardTheme: 'classic',
   weekdaySign: null,
   blueScarf: false,
+  petSkin: null,
   duorouEquipment3d: false,
 };
 
@@ -107,6 +110,7 @@ const menuEl = document.getElementById('context-menu') as HTMLDivElement;
 const typingFollowButton = menuEl.querySelector<HTMLButtonElement>('[data-action="toggle-typing-follow"]')!;
 const breedPillsEl = document.getElementById('breed-pills') as HTMLDivElement;
 const keyboardLayoutEl = document.getElementById('keyboard-layout-options') as HTMLDivElement;
+const petSkinEl = document.getElementById('pet-skin-options') as HTMLDivElement;
 const scarfButton = menuEl.querySelector<HTMLButtonElement>('[data-action="toggle-scarf"]')!;
 const equipmentEl = document.getElementById('pet-equipment-options') as HTMLDivElement;
 const scaleSliderEl = document.getElementById('scale-slider') as HTMLInputElement;
@@ -228,7 +232,15 @@ function syncMenuUI(): void {
   }
 
   const isDuorou = settings.catBreed === duorouId;
-  scarfButton.hidden = isDuorou;
+  const hasWardrobe = supportsWardrobe(settings.catBreed);
+  const skin = isPetSkin(settings.petSkin) ? settings.petSkin : settings.blueScarf ? 'classic' : 'plain';
+  petSkinEl.hidden = !hasWardrobe;
+  scarfButton.hidden = isDuorou || hasWardrobe;
+  petSkinEl.querySelectorAll<HTMLButtonElement>('[data-pet-skin]').forEach(btn => {
+    const active = btn.dataset.petSkin === skin;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', String(active));
+  });
   const kbLayout: KeyboardLayoutId = !isDuorou && settings.keyboardLayout === '108' ? '108' : '65';
   const kbOrient: KeyboardOrientation = !isDuorou && settings.keyboardOrientation === 'viewer' ? 'viewer' : 'cat';
   keyboardLayoutEl.hidden = isDuorou;
@@ -258,7 +270,8 @@ function syncMenuUI(): void {
 
   engine.showKeyBubbles = settings.showKeyBubbles;
   engine.keyboardTheme = theme;
-  engine.petDecorations = { weekdaySign, blueScarf: !isDuorou && settings.blueScarf };
+  engine.petDecorations = { weekdaySign, blueScarf: !isDuorou && !hasWardrobe && settings.blueScarf };
+  engine.petSkin = hasWardrobe ? skin : 'plain';
   engine.setCatAppearance(isDuorou ? 'black' : activeCat?.id || 'black', isDuorou ? null : activeCat);
   const layoutChanged = engine.keyboardLayout !== kbLayout || engine.keyboardOrientation !== kbOrient;
   engine.setKeyboardConfig(kbLayout, kbOrient);
@@ -726,7 +739,7 @@ async function bootstrap(): Promise<void> {
 
   menuEl.addEventListener('click', (e) => {
     const target = (e.target as HTMLElement).closest<HTMLElement>(
-      '[data-action], [data-scale], [data-breed], [data-kblayout], [data-kborient], [data-pet-equipment], [data-keyboard-theme]',
+      '[data-action], [data-scale], [data-breed], [data-kblayout], [data-kborient], [data-pet-equipment], [data-keyboard-theme], [data-pet-skin]',
     );
     if (!target) return;
 
@@ -734,6 +747,12 @@ async function bootstrap(): Promise<void> {
     if (equipment === '2d' || equipment === '3d') {
       void applySettingsPatch({ duorouEquipment3d: equipment === '3d' });
       closeContextMenu();
+      return;
+    }
+
+    const skin = target.dataset.petSkin;
+    if (supportsWardrobe(settings.catBreed) && isPetSkin(skin)) {
+      void applySettingsPatch({ petSkin: skin });
       return;
     }
 

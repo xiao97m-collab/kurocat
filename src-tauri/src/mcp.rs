@@ -286,6 +286,9 @@ fn execute_tool(name: &str, args: &Value, on_change: &dyn Fn()) -> Value {
             }
             if let Some(enabled) = args.get("blueScarf").and_then(|v| v.as_bool()) {
                 s.blue_scarf = enabled;
+                if matches!(s.pet_skin.as_deref(), Some("plain" | "classic")) {
+                    s.pet_skin = None;
+                }
             }
             if let Some(layout) = args.get("keyboardLayout").and_then(|v| v.as_str()) {
                 s.keyboard_layout = crate::config::normalize_keyboard_layout(layout);

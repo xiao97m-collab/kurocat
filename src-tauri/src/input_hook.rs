@@ -796,8 +796,8 @@ pub mod macos_hook {
         };
 
         let msg = format!(
-            "辅助功能权限：{}\n输入监控权限：{}\nCGEventTap 通道：{}\nIOHIDManager 通道：{}\n已收到全局按键：{} 次\n\n{}",
-            ax_txt, listen_txt, tap_txt, hid_txt, st.key_events_received, tip
+            "辅助功能权限：{}\n输入监控权限：{}\nCGEventTap 通道：{}\nIOHIDManager 通道：{}\n已收到全局按键：{} 次\n最近一次跨屏跟随：{}\n\n{}",
+            ax_txt, listen_txt, tap_txt, hid_txt, st.key_events_received, crate::typing_follow::last_probe(), tip
         );
         let escaped = msg
             .replace('\\', "\\\\")

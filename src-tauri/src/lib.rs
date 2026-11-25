@@ -12,7 +12,8 @@ mod updater;
 use cats::{cats_path, desktop_cats, CatSkinConfig, CORGI_ID, DUOROU_ID};
 use config::{
     config_path, load_settings, normalize_cat_breed, normalize_keyboard_layout,
-    normalize_keyboard_orientation, normalize_keyboard_theme, save_settings, set_windows_autostart, AppSettings,
+    normalize_keyboard_orientation, normalize_keyboard_theme, normalize_pet_skin, save_settings,
+    set_windows_autostart, AppSettings,
 };
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -88,8 +89,6 @@ pub struct AppState {
     pub mcp_enabled: Arc<AtomicBool>,
     pub update_banner_open: Arc<AtomicBool>,
     pub paused_guard: Arc<AtomicBool>,
-    #[cfg(target_os = "macos")]
-    typing_anchor: Mutex<Option<typing_follow::Anchor>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -140,6 +139,7 @@ fn update_settings(app: AppHandle, state: State<'_, AppState>, mut patch: AppSet
     patch.keyboard_layout = normalize_keyboard_layout(&patch.keyboard_layout);
     patch.keyboard_orientation = normalize_keyboard_orientation(&patch.keyboard_orientation);
     patch.keyboard_theme = normalize_keyboard_theme(&patch.keyboard_theme);
+    patch.pet_skin = patch.pet_skin.as_deref().and_then(normalize_pet_skin);
 
     let (prev_autostart, prev_scale, prev_layout) = {
         let s = state.settings.lock().unwrap();
@@ -150,10 +150,6 @@ fn update_settings(app: AppHandle, state: State<'_, AppState>, mut patch: AppSet
     }
 
     state.mcp_enabled.store(patch.mcp_enabled, Ordering::Relaxed);
-    #[cfg(target_os = "macos")]
-    if !patch.follow_typing {
-        *state.typing_anchor.lock().unwrap() = None;
-    }
 
     let layout = pet_keyboard_layout(&patch);
     let size_changed = (patch.scale - prev_scale).abs() > 0.005 || layout != prev_layout;
@@ -280,10 +276,6 @@ pub fn reload_and_emit_all(app: &AppHandle) {
     state
         .mcp_enabled
         .store(disk_settings.mcp_enabled, Ordering::Relaxed);
-    #[cfg(target_os = "macos")]
-    if !disk_settings.follow_typing {
-        *state.typing_anchor.lock().unwrap() = None;
-    }
 
     if let Some(win) = app.get_webview_window("main") {
         if top_changed {
@@ -796,8 +788,6 @@ pub fn run() {
             mcp_enabled,
             update_banner_open,
             paused_guard,
-            #[cfg(target_os = "macos")]
-            typing_anchor: Mutex::new(None),
         })
         .setup(move |app| {
             let handle = app.handle().clone();

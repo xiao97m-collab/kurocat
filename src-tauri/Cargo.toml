@@ -1,6 +1,6 @@
 [package]
 name = "kuro-cat-pet"
-version = "1.2.1"
+version = "1.2.3"
 description = "Cross-platform desktop cat typing & mouse companion for Windows and macOS"
 authors = ["Kevin Hao"]
 edition = "2021"
@@ -27,7 +27,7 @@ serde_json = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["NSScreen", "NSWindow"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["libc", "NSRunningApplication", "NSScreen", "NSWindow", "NSWorkspace"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSGeometry", "NSProcessInfo"] }
 
 [target.'cfg(windows)'.dependencies]

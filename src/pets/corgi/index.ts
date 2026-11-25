@@ -1,6 +1,7 @@
 import type { KuroCatEngine } from '../../catEngine';
 import { resolveKeyByVk } from '../../keyboardLayout';
 import { drawSleepIndicator } from '../sleep-indicator';
+import { hasSleeves, type Arm } from '../wardrobe';
 import proneImage from './assets/prone.png';
 import uprightImage from './assets/upright-torso.png';
 
@@ -192,6 +193,14 @@ export async function loadCorgi(engine: KuroCatEngine) {
     }
     ctx.restore();
 
+    if (engine.petSkin !== 'plain') {
+      ctx.save();
+      ctx.translate(566.5,738.5);
+      ctx.scale(1 / artScale[0], 1 / artScale[0]);
+      engine.wardrobe.hat(engine.petSkin, 0, 0, Math.atan2(-33, 249), true, true);
+      ctx.restore();
+    }
+
     if (hurry > .01) {
       const pop = Math.sin(Math.PI * smooth((now - uprightSince - 180) / 240)) * .20;
       ctx.save();
@@ -377,25 +386,10 @@ export async function loadCorgi(engine: KuroCatEngine) {
 
       const uprightArt = smooth((pose - .10) / .46);
       const hurry = smooth((headRise - .38) / .40);
-      ctx.save();
-      ctx.translate(deskX, deskY);
-      drawLoaf(ctx, 1 - uprightArt);
-      drawUprightTorso(ctx, chest, lean, dip, uprightArt);
-      ctx.save();
-      ctx.translate(mix(269, 218, chest) + lean * .82, mix(286, 265, headRise) + dip);
-      ctx.rotate(mix(-.54, 0, chest));
-      engine.paintPetScarf(ctx, 0, 0, mix(104, 110, chest), mix(.77, .87, chest));
-      ctx.restore();
-      drawSharedHead(ctx, headRise, lean, dip, blink, now, hurry);
-      if (sleepSince !== null) drawSleepIndicator(ctx, head.x + 59, head.y - 103, now - sleepSince);
-      ctx.restore();
-      engine.paintPetEquipment(ctx, 'mouse');
-      engine.paintPetEquipment(ctx, 'keyboard', hurry > .5 ? 3 : undefined);
-      engine.paintWeekdaySign(ctx, undefined, undefined, .80);
       const mouse = engine.getPetMouse();
       const mousePalm = { x: mouse.base[0] + mouse.offset[0] + 2, y: mouse.base[1] + mouse.offset[1] - 13 };
 
-      for (const i of [0, 1]) {
+      const forelegs = [0, 1].map(i => {
         const grip = i === 0 ? smooth(mouseGrip) : 0;
         const stroke = strokes[i];
         const tap = taps[i];
@@ -427,7 +421,64 @@ export async function loadCorgi(engine: KuroCatEngine) {
         const extend = Math.max(grip, reach, braceSupport, clamp(Math.hypot(tip.x - rest.x, tip.y - rest.y) / 14, 0, 1));
         const alignment = Math.atan2(tip.y - shoulder.y, tip.x - shoulder.x) - Math.PI / 2;
         const tilt = clamp(alignment, -1.37, 1.37) * extend;
+        const sleeveLength = Math.min(engine.petSkin === 'sakura' ? 42 : 32,
+          Math.hypot(tip.x - shoulder.x, tip.y - shoulder.y) * .69);
+        const sleeve: Arm = [shoulder.x, shoulder.y, shoulder.x + Math.cos(alignment + Math.PI / 2) * sleeveLength,
+          shoulder.y + Math.sin(alignment + Math.PI / 2) * sleeveLength];
+        return {i, stroke, tap, grip, shoulder, tip, extend, tilt, reach, sleeve};
+      });
+
+      const skin = engine.petSkin;
+      ctx.save();
+      ctx.translate(deskX, deskY);
+      const neckX = mix(269, 218, chest) + lean * .82;
+      const neckY = mix(286, 265, headRise) + dip;
+      const collarAngle = mix(-.54, 0, chest);
+      if (skin === 'explorer') engine.wardrobe.pack(mix(307,278,chest) + lean * .42,
+        mix(220,266,chest) + dip, uprightArt < .5);
+      drawLoaf(ctx, 1 - uprightArt);
+      drawUprightTorso(ctx, chest, lean, dip, uprightArt);
+      if (skin !== 'plain') {
+        ctx.save();
+        ctx.globalAlpha = 1 - uprightArt;
+        engine.wardrobe.prone(skin);
+        if (skin === 'explorer') engine.wardrobe.explorerStraps({neck: [254,293,-.46],back: [312,213]},true,'rest');
+        engine.wardrobe.scarf(skin,neckX,neckY,collarAngle,83,true,true);
+        ctx.restore();
+
+        ctx.save();
+        ctx.globalAlpha = uprightArt;
+        const center = 216 + lean * .81;
+        const arms: Arm[] = hasSleeves(skin)
+          ? forelegs.map(({sleeve}) => [sleeve[0] - deskX, sleeve[1] - deskY, sleeve[2] - deskX, sleeve[3] - deskY])
+          : [];
+        engine.wardrobe.body(skin, [center-62,center+57,mix(283,261,headRise)+dip,
+          center-69,center+78,311+dip,arms],true);
+        if (skin === 'explorer') engine.wardrobe.explorerStraps({neck: [neckX,neckY,collarAngle],back: [center+65,263+dip]},true,'ready');
+        engine.wardrobe.scarf(skin,neckX,neckY,collarAngle,102,false);
+        ctx.restore();
+      } else {
+        ctx.save();
+        ctx.translate(neckX,neckY);
+        ctx.rotate(collarAngle);
+        engine.paintPetScarf(ctx,0,0,mix(104,110,chest),mix(.77,.87,chest));
+        ctx.restore();
+      }
+      drawSharedHead(ctx, headRise, lean, dip, blink, now, hurry);
+      if (sleepSince !== null) drawSleepIndicator(ctx, head.x + 59, head.y - 103, now - sleepSince);
+      ctx.restore();
+      engine.paintPetEquipment(ctx, 'mouse');
+      engine.paintPetEquipment(ctx, 'keyboard', hurry > .5 ? 3 : undefined);
+      engine.paintWeekdaySign(ctx, undefined, undefined, .80);
+
+      for (const {i, stroke, tap, grip, shoulder, tip, extend, tilt, reach, sleeve} of forelegs) {
         if (extend > .04) straightArm(ctx, shoulder, tip, mix(20, 18.5, chest));
+        if (hasSleeves(skin)) {
+          ctx.save();
+          ctx.globalAlpha = Math.max(uprightArt, extend * .84);
+          engine.wardrobe.sleeve(skin,sleeve,true);
+          ctx.restore();
+        }
         paintPawCutout(ctx, i, tip, tilt, stroke.contact ? reach : reach * .47);
         pawTips[i] = tip;
 

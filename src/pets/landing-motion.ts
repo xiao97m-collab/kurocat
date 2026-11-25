@@ -111,17 +111,9 @@ export function createLandingPainter(
     ctx.translate(pivotX + shiftX, pivotY + shiftY);
     ctx.rotate(rotation);
     ctx.scale(sx, sy);
-    ctx.drawImage(atlas.image, sourceX, sourceY, width, height, -width / 2, -height, width, height);
-
-    if (engine.petDecorations.blueScarf) {
-      const braced = pose === 'brace' || pose === 'flinch';
-      const reachingMouse = pose === 'mouse-touch' || pose === 'mouse-key';
-      const scarfX = (corgi && pose === 'rest' ? 231 : corgi ? 205 : 196)
-        - (reachingMouse ? 23 : 0) + (wide ? corgi ? 76 : 82 : 0);
-      const scarfY = (corgi ? braced ? 272 : pose === 'rest' ? 288 : 257 : braced ? 219 : 174)
-        + (wide ? corgi ? 3 : -16 : 0);
-      engine.paintPetScarf(ctx, scarfX - pivotX, scarfY - pivotY, corgi && pose === 'rest' ? 86 : 100, .8);
-    }
+    engine.wardrobe.landing(engine.petSkin, corgi ? 'corgi' : 'cat', pose, wide, pivotX, pivotY, () => {
+      ctx.drawImage(atlas.image, sourceX, sourceY, width, height, -width / 2, -height, width, height);
+    });
     ctx.restore();
   }
 

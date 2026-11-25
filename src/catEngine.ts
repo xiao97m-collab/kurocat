@@ -13,6 +13,7 @@ import { resolveCustomSkin, type CatSkinConfig, type ResolvedSkin } from './catS
 import type { PetEquipment3D } from './pets/duorou/equipment3d';
 import { drawSleepIndicator } from './pets/sleep-indicator';
 import { drawBlueScarf } from './pets/blue-scarf';
+import { createWardrobePainter, hasSleeves, type Arm, type PetSkin } from './pets/wardrobe';
 import { createWeekdayLamp } from './pets/duorou/weekday-lamp';
 
 export const LOGICAL_W = 420;
@@ -137,6 +138,8 @@ export class KuroCatEngine {
   private landingPainter: ((ctx: CanvasRenderingContext2D, now: number) => boolean) | null = null;
   private petEquipment3d: PetEquipment3D | null = null;
 
+  public petSkin: PetSkin = 'plain';
+  public readonly wardrobe: ReturnType<typeof createWardrobePainter>;
   public petDecorations = { weekdaySign: false, blueScarf: false };
   private weekdayLamp?: ReturnType<typeof createWeekdayLamp>;
 
@@ -202,6 +205,9 @@ export class KuroCatEngine {
   }
 
   private drawPetEquipment(ctx: CanvasRenderingContext2D, item: 'keyboard' | 'mouse'): void {
+    if (item === 'mouse' && this.wardrobe.prop(this.petSkin,
+      this.mouseBaseX + this.mouseOffsetX, this.mouseBaseY + this.mouseOffsetY,
+      this.mouseLeftPress, this.mouseRightPress, this.mouseOffsetX)) return;
     const equipment = this.petEquipment3d;
     if (!equipment?.isAvailable()) {
       if (item === 'keyboard') this.drawKeyboard(ctx);
@@ -402,6 +408,7 @@ export class KuroCatEngine {
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Could not initialize 2D canvas context');
     this.ctx = ctx;
+    this.wardrobe = createWardrobePainter(ctx);
 
     for (const k of KEYBOARD_KEYS_65) {
       this.keyAnims.set(k.id, { pressed: false, pressAmount: 0, lastHitAt: -10000 });
@@ -1223,11 +1230,13 @@ export class KuroCatEngine {
     if (this.tailStrike) this.drawTail(ctx);
 
     // Layer 3: Exact measured spine-deformable cat silhouette (ears, cheeks, neck, pear belly, grounded hind feet, eyes & tiny whiskers)
-    this.drawCatBody(ctx, breath, purrShift);
+    const sleeves = hasSleeves(this.petSkin) ? this.getCostumeSleeves(breath, purrShift) : [];
+    this.drawCatBody(ctx, breath, purrShift, sleeves);
 
     // Layer 4: True-scale velvety cat paws (tapered idle legs / planted diagonal mouse support leg / bent curled chest paw / plump round poking paw!)
     this.drawPaw(ctx, this.leftPaw, breath);
     this.drawPaw(ctx, this.rightPaw, breath);
+    for (const sleeve of sleeves) this.wardrobe.sleeve(this.petSkin, sleeve, false);
     this.paintWeekdaySign(ctx, undefined, undefined, .80);
 
     if (this.sleepStartedAt !== null && this.sleepDepth > .85) {
@@ -1400,7 +1409,35 @@ export class KuroCatEngine {
     ctx.restore();
   }
 
-  private drawCatBody(ctx: CanvasRenderingContext2D, breath: number, purrShift: number): void {
+  private getCostumeSleeves(breath: number, purrShift: number): Arm[] {
+    const idleCuff = this.spinePoint(.85, breath);
+    return [this.leftPaw, this.rightPaw].map(paw => {
+      const shoulder = this.getLiveShoulder(paw, breath);
+      const curl = this.getLiveCurledPawPos(paw, breath);
+      const sign = paw.side === 'left' ? -1 : 1;
+      const reach = Math.max(0, 1 - paw.idleWeight - paw.curlWeight);
+      const mouseDrop = paw.mode === 'mouse'
+        ? Math.max(this.mouseLeftPress, this.mouseRightPress, this.mouseMiddlePress) * 1.8 : 0;
+      const tip = { x: paw.pos.x, y: paw.pos.y + mouseDrop };
+      const distance = Math.hypot(tip.x - shoulder.x, tip.y - shoulder.y);
+      const maxLength = this.petSkin === 'sakura' ? 72 : 53;
+      const length = Math.min(.66, maxLength / Math.max(1, distance));
+      const cuffX = blendCuff(idleCuff.x + sign * 24, curl.x, tip.x, shoulder.x);
+      const cuffY = blendCuff(idleCuff.y, curl.y, tip.y, shoulder.y);
+      return [
+        shoulder.x + (cuffX - shoulder.x) * .14 + purrShift,
+        shoulder.y + (cuffY - shoulder.y) * .16 + 3,
+        cuffX + purrShift, cuffY,
+      ];
+
+      function blendCuff(idle: number, curled: number, active: number, root: number): number {
+        return idle * paw.idleWeight + (root + (curled - root) * .68) * paw.curlWeight
+          + (root + (active - root) * length) * reach;
+      }
+    });
+  }
+
+  private drawCatBody(ctx: CanvasRenderingContext2D, breath: number, purrShift: number, sleeves: Arm[]): void {
     if (this.customSkin) {
       this.drawCustomCatBody(ctx, this.customSkin, breath, purrShift);
       return;
@@ -1450,6 +1487,9 @@ export class KuroCatEngine {
       y: hcy + crownRelY * Math.cos(this.headTilt),
     };
     const basePt = this.spinePoint(1.0, breath);
+    const back = this.spinePoint(.60, breath);
+    const neck = this.spinePoint(.42, breath);
+    if (this.petSkin === 'explorer') this.wardrobe.pack(back.x + 59 + purrShift, back.y + 4, false);
 
     ctx.save();
     if (isRagdoll) {
@@ -1631,6 +1671,23 @@ export class KuroCatEngine {
       ctx.fill();
     }
 
+    if (this.petSkin !== 'plain') {
+      ctx.save();
+      ctx.shadowBlur = 0;
+      const hem = this.spinePoint(.86, breath);
+      this.wardrobe.body(this.petSkin, [
+        neck.x + purrShift - 52, neck.x + purrShift + 52, neck.y + 1,
+        hem.x + purrShift - 69 * bellySwell, hem.x + purrShift + 69 * bellySwell, hem.y, sleeves,
+      ], false);
+      if (this.petSkin === 'explorer') {
+        this.wardrobe.explorerStraps({
+          neck: [neck.x + purrShift, neck.y - 2, this.headTilt],
+          back: [back.x + purrShift + 64, back.y - 4],
+        }, false, 'ready');
+      }
+      ctx.restore();
+    }
+
     // 3) Compact plush rounded cat ears matching ORIG 0.3s exact height (shorter & cuter, no tall rabbit ears!)
     ctx.save();
     ctx.translate(hcx, hcy);
@@ -1765,6 +1822,11 @@ export class KuroCatEngine {
     // 6) Expressive eyes (lemon-chartreuse for Black Cat / luminous sapphire-blue for Ragdoll!)
     this.drawEyes(ctx, wShift, -1);
     this.paintPetScarf(ctx, 0, 45, 109, .84);
+    if (this.petSkin !== 'plain') {
+      ctx.shadowBlur = 0;
+      this.wardrobe.scarf(this.petSkin, 0, 42, 0, this.petSkin === 'classic' ? 100 : 107, false);
+      this.wardrobe.hat(this.petSkin, 0, -1, 0, false, false);
+    }
 
     ctx.restore(); // end head
 
@@ -2481,6 +2543,13 @@ export class KuroCatEngine {
           ctx.restore();
         }
 
+        // Garments cover the upper portions of the seated foreleg seams.
+        if (hasSleeves(this.petSkin) || this.petSkin === 'magic') {
+          const edge = this.spinePoint(.86, breath).y + 6;
+          ctx.beginPath();
+          ctx.rect(0, edge, this.logicalW, this.logicalH - edge);
+          ctx.clip();
+        }
         // Crisp subtle outer leg curve & inner leg-gap line (4 total lines across both legs — exact ORIG 0.3s!)
         const lineGrad = ctx.createLinearGradient(topSp.x, topSp.y, botSp.x, botSp.y);
         if (isRagdoll) {
