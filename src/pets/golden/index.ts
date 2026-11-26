@@ -7,6 +7,7 @@ import { createInteractionMotion } from './interaction-motion';
 import { createGripPainter, drawFishDream } from './pose-details';
 import interactionAssets from './assets/interactions.json';
 import bridgeAssets from './assets/bridges.json';
+import gazeAssets from './assets/gaze.json';
 
 type Point = { x: number; y: number };
 type Hand = 'left' | 'right';
@@ -23,6 +24,7 @@ const mouse = { x: 63, y: 324, scale: .81 };
 const breathingAnchorTime = 0;
 const sleepAnchor = 62 * 1000 / assets.sleep.fps;
 const idleDelay = 10_000;
+const hoverDelay = 550;
 const urls = import.meta.glob<string>('./assets/*.webp', { eager: true, query: '?url', import: 'default' });
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const timeline = <T>(frames: T[], progress: number) => frames[Math.round(clamp(progress, 0, 1) * (frames.length - 1))];
@@ -38,21 +40,41 @@ async function loadPages(files: string[]): Promise<HTMLImageElement[]> {
 }
 
 export async function loadGolden(engine: KuroCatEngine) {
-  const [idlePages, sleepPages, typingPages, interactionPages, bridgePages] = await Promise.all([
+  const [idlePages, sleepPages, typingPages, interactionPages, bridgePages, gazePages] = await Promise.all([
     loadPages(assets.idle.cards),
     loadPages(assets.sleep.cards),
     loadPages(assets.typing.cards),
     loadPages(interactionAssets.cards),
     loadPages(bridgeAssets.cards),
+    loadPages(gazeAssets.cards),
   ]);
   const frames: Record<string, number[]> = assets.typing.frames;
   const clips = assets.typing.sequences;
   const composite = createTypingComposite(drawRegisteredFrame, assets.typing.neutral);
   const paintGrip = createGripPainter();
+  const [faceX, faceY, faceW, faceH] = gazeAssets.screen;
   const facePlate = document.createElement('canvas');
-  facePlate.width = 420;
-  facePlate.height = 440;
+  facePlate.width = faceW * 2;
+  facePlate.height = faceH * 2;
   const gazeFace = facePlate.getContext('2d')!;
+  gazeFace.scale(2, 2);
+  const faceMask = document.createElement('canvas');
+  faceMask.width = faceW * 2;
+  faceMask.height = faceH * 2;
+  const mask = faceMask.getContext('2d')!;
+  mask.scale(2, 2);
+  // Keep the head fully opaque. Blend only the collar and the outer shoulder.
+  const collar = mask.createLinearGradient(0, 275 - faceY, 0, 299 - faceY);
+  collar.addColorStop(0, '#000');
+  collar.addColorStop(1, 'transparent');
+  mask.fillStyle = collar;
+  mask.fillRect(0, 0, faceW, faceH);
+  const shoulder = mask.createLinearGradient(224 - faceX, 0, 264 - faceX, 0);
+  shoulder.addColorStop(0, '#000');
+  shoulder.addColorStop(1, 'transparent');
+  mask.globalCompositeOperation = 'destination-in';
+  mask.fillStyle = shoulder;
+  mask.fillRect(0, 0, faceW, faceH);
   const heldButtons = new Set<string>();
   const interaction = createInteractionMotion();
   let gaze = createGazeController();
@@ -74,6 +96,9 @@ export async function loadGolden(engine: KuroCatEngine) {
   let activityExit: { at: number; value: number } | null = null;
   let sleepInterrupted = false;
   let lastSleepFrameTime = 0;
+  let hoverAt: number | null = null;
+  let hoverUsed = false;
+  let hoverPlay = false;
 
   function keyPoint(key: KeySpec): Point {
     const target = engine.getPetKeyTarget(key);
@@ -194,34 +219,25 @@ export async function loadGolden(engine: KuroCatEngine) {
         return;
       }
       drawGrip(area);
-      // Only the face from the supplied look clip replaces the matching area of the held pose.
-      if (force <= 0) return;
+      const directions = gazeAssets.frames;
+      const direction = Math.round(angle * directions.length / (2 * Math.PI)) % directions.length;
+      const poses = directions[direction];
+      const level = Math.round(force * poses.length);
+      if (level === 0) return;
+      const [page, x, y] = poses[level - 1];
+      const [w, h] = gazeAssets.cell;
+      gazeFace.clearRect(0, 0, faceW, faceH);
+      gazeFace.drawImage(gazePages[page], x, y, w, h, 0, 0, faceW, faceH);
+      gazeFace.save();
+      gazeFace.globalCompositeOperation = 'destination-in';
+      gazeFace.drawImage(faceMask, 0, 0, faceW, faceH);
+      gazeFace.restore();
+
       area.save();
-      const neck = area.createLinearGradient(0, 239, 0, 275);
-      neck.addColorStop(0, `rgba(0,0,0,${force})`);
-      neck.addColorStop(1, 'transparent');
       area.globalCompositeOperation = 'destination-out';
-      area.fillStyle = neck;
-      area.fillRect(26, 150, 180, 125);
-      area.restore();
-      const face = gazeFace;
-      face.clearRect(0, 0, 420, 440);
-      const first = Math.floor(angle * clips.gaze.length / (2 * Math.PI));
-      const mix = angle * clips.gaze.length / (2 * Math.PI) - first;
-      blendActors(face, mix, () => drawInteractionFrame(face, clips.gaze[first]),
-        () => drawInteractionFrame(face, clips.gaze[(first + 1) % clips.gaze.length]));
-      face.save();
-      face.globalCompositeOperation = 'destination-in';
-      face.fillStyle = neck;
-      face.fillRect(26, 150, 180, 125);
-      face.clearRect(0, 0, 420, 150);
-      face.clearRect(0, 275, 420, 165);
-      face.clearRect(0, 150, 26, 125);
-      face.clearRect(206, 150, 214, 125);
-      face.restore();
-      area.save();
+      area.drawImage(faceMask, faceX, faceY, faceW, faceH);
       area.globalCompositeOperation = 'lighter';
-      area.drawImage(face.canvas, 0, 0);
+      area.drawImage(facePlate, faceX, faceY, faceW, faceH);
       area.restore();
     };
     if (grip <= 0) {
@@ -375,6 +391,8 @@ export async function loadGolden(engine: KuroCatEngine) {
       gaze = createGazeController();
       pointer = { x: 0, y: 0 };
       lastSleepFrameTime = 0;
+      hoverAt = null;
+      hoverUsed = hoverPlay = false;
       heldButtons.clear();
     },
     keyDown(vk: number, repeat: boolean, now: number) {
@@ -391,20 +409,36 @@ export async function loadGolden(engine: KuroCatEngine) {
         heldButtons.add(button);
       } else heldButtons.delete(button);
     },
-    cursor(rx: number, ry: number, _inside: boolean, _now: number) {
+    cursor(rx: number, ry: number, inside: boolean, now: number, overCat = false) {
+      const x = rx * 420, y = ry * 440;
       pointer = {
-        x: clamp((rx * 420 - 156) / 112, -1, 1),
-        y: clamp((ry * 440 - 235) / 98, -1, 1),
+        x: clamp((x - 156) / 112, -1, 1),
+        y: clamp((y - 235) / 98, -1, 1),
       };
+      const inOval = (cx: number, cy: number, w: number, h: number) =>
+        ((x - cx) / w) ** 2 + ((y - cy) / h) ** 2 <= 1;
+      const body = leisure === 'sleep'
+        ? inOval(209, 275, 149, 43)
+        : inOval(149, 239, 58, 61) || inOval(222, 268, 55, 43);
+      if (inside && overCat && body && y < 311) hoverAt ??= now;
+      else {
+        hoverAt = null;
+        hoverUsed = false;
+      }
     },
     draw(ctx: CanvasRenderingContext2D, now: number) {
       const dt = lastFrame ? clamp(now - lastFrame, 0, 44) : 16;
       lastFrame = now;
       if (phase !== 'rest' && drawTyping(ctx, now, dt)) return;
-      const wantsMouse = heldButtons.size > 0 || now - mouseAt < 840;
-      const activeInput = wantsMouse || pending !== null || engine.hasHeldPetKey() || now - lastKey < 200;
-      if (activeInput) idleSince = null;
+      const buttonHeld = heldButtons.size > 0;
+      const keyActive = pending !== null || engine.hasHeldPetKey() || now - lastKey < 200;
+      const wantsPlay = hoverAt !== null && !hoverUsed && !buttonHeld && !keyActive;
+      const hoverReady = wantsPlay && now - hoverAt! >= hoverDelay;
+      const wantsMouse = buttonHeld || (!wantsPlay && !hoverPlay && now - mouseAt < 840);
+      const activeInput = wantsMouse || keyActive;
+      if (activeInput || hoverReady) idleSince = null;
       if (leisure === 'play') {
+        if (hoverReady) hoverUsed = true;
         const value = clamp((now - leisureAt) / 4800, 0, 1);
         if (activeInput) activityExit ??= { at: now, value };
         const exit = activityExit ? (now - activityExit.at) / 320 : null;
@@ -414,9 +448,10 @@ export async function loadGolden(engine: KuroCatEngine) {
         }
         idleTime = breathingAnchorTime;
         leisure = activityExit = null;
+        hoverPlay = false;
       }
-      if (leisure === 'sleep' && activeInput) sleepInterrupted = true;
-      const pose = interaction.step(dt, wantsMouse, leisure === 'sleep' && !sleepInterrupted, pending !== null);
+      if (leisure === 'sleep' && (activeInput || hoverReady)) sleepInterrupted = true;
+      const pose = interaction.step(dt, wantsMouse, leisure === 'sleep' && !sleepInterrupted, pending !== null, wantsPlay);
       if (pose.kind === 'reach' || pose.kind === 'gaze') {
         idleSince = null;
         drawMousePose(ctx, pose.kind, pose.value, now, dt);
@@ -436,7 +471,11 @@ export async function loadGolden(engine: KuroCatEngine) {
         idleSince = null;
         return;
       }
-      if (!activeInput && !leisure) {
+      if (hoverReady) {
+        leisure = 'play';
+        leisureAt = now;
+        hoverUsed = hoverPlay = true;
+      } else if (!activeInput && !leisure) {
         idleSince ??= now;
         if (now - idleSince >= idleDelay) {
           leisure = Math.random() < .5 ? 'sleep' : 'play';

@@ -15,7 +15,7 @@ export function createInteractionMotion() {
 
   return {
     reset() { enter('rest'); },
-    step(dt: number, wantsMouse: boolean, wantsSleep: boolean, typing: boolean): Pose {
+    step(dt: number, wantsMouse: boolean, wantsSleep: boolean, typing: boolean, wantsPlay: boolean): Pose {
       const mouse = wantsMouse && !typing;
       const sleep = wantsSleep && !typing && !mouse;
       if (phase === 'rest') {
@@ -29,9 +29,9 @@ export function createInteractionMotion() {
         case 'release': {
           const leaving = phase === 'release';
           if (leaving && mouse) enter('reach', progress);
-          else if (typing && !leaving) enter('release', progress);
+          else if ((typing || wantsPlay) && !leaving) enter('release', progress);
           progress = clamp(progress + (phase === 'release'
-            ? -dt / (typing ? 690 : 1570)
+            ? -dt / (typing || wantsPlay ? 690 : 1570)
             : dt / 1510));
           if (progress >= 1) enter('held');
           else if (progress <= 0 && phase === 'release') {

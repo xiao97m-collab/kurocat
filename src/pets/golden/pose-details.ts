@@ -1,19 +1,30 @@
 export function createGripPainter() {
   const plate = document.createElement('canvas');
-  plate.width = 420;
-  plate.height = 440;
-  const source = plate.getContext('2d', { willReadFrequently: true })!;
+  const sceneWidth = 420, sceneHeight = 440, resolution = 2;
+  plate.width = sceneWidth * resolution;
+  plate.height = sceneHeight * resolution;
+  const source = plate.getContext('2d')!;
+  source.scale(resolution, resolution);
   const left = 14, right = 117, top = 272, wrist = 309, bottom = 348;
   const ease = (t: number) => t * t * (3 - 2 * t);
   const w = right - left, h = bottom - top;
-  const moved = source.createImageData(w, h);
+  // The wrist stays small for the pixel deformation. The face keeps its
+  // full-density pixels across the rest of the plate.
+  const wristPlate = document.createElement('canvas');
+  wristPlate.width = w;
+  wristPlate.height = h;
+  const wristPixels = wristPlate.getContext('2d', { willReadFrequently: true })!;
+  const moved = wristPixels.createImageData(w, h);
   const clamp = (n: number, end: number) => Math.max(0, Math.min(end, n));
 
   return function paintGrip(ctx: CanvasRenderingContext2D, draw: (area: CanvasRenderingContext2D) => void,
     dx: number, dy: number, equipment: () => void, mouseX: number, mouseY: number) {
-    source.clearRect(0, 0, plate.width, plate.height);
+    source.clearRect(0, 0, sceneWidth, sceneHeight);
     draw(source);
-    const original = source.getImageData(left, top, w, h).data;
+    wristPixels.clearRect(0, 0, w, h);
+    wristPixels.drawImage(plate, left * resolution, top * resolution,
+      w * resolution, h * resolution, 0, 0, w, h);
+    const original = wristPixels.getImageData(0, 0, w, h).data;
     const result = moved.data;
     function weight(x: number, y: number) {
       return ease(clamp((w - x) / 46, 1)) * ease(clamp(y / (wrist - top), 1));
@@ -44,14 +55,16 @@ export function createGripPainter() {
         result[i + 3] = alpha;
       }
     }
-    source.putImageData(moved, left, top);
-    ctx.drawImage(plate, 0, 0);
+    wristPixels.putImageData(moved, 0, 0);
+    source.clearRect(left, top, w, h);
+    source.drawImage(wristPlate, left, top);
+    ctx.drawImage(plate, 0, 0, sceneWidth, sceneHeight);
     equipment();
     ctx.save();
     ctx.beginPath();
     ctx.ellipse(mouseX, mouseY - 5, 17, 15, 0, 0, 2 * Math.PI);
     ctx.clip();
-    ctx.drawImage(plate, left, top, w, h, left, top, w, h);
+    ctx.drawImage(wristPlate, left, top);
     ctx.restore();
   };
 }

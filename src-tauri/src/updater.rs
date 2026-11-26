@@ -4,6 +4,9 @@ use tauri::{AppHandle, Emitter};
 
 const REPO_API_LATEST: &str = "https://api.github.com/repos/xiao97m-collab/kurocat/releases/latest";
 const REPO_RELEASES_PAGE: &str = "https://github.com/xiao97m-collab/kurocat/releases/latest";
+const PUBLIC_ASSETS_PATH: &str =
+    "https://github.com/xiao97m-collab/kurocat/releases/expanded_assets/";
+const PUBLIC_DOWNLOAD_PATH: &str = "/xiao97m-collab/kurocat/releases/download/";
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -168,7 +171,7 @@ fn summarize_notes(body: Option<&str>) -> String {
 }
 
 #[cfg(windows)]
-fn fetch_latest_release_json() -> Result<String, String> {
+fn fetch_release_text(url: &str, accept: &str) -> Result<String, String> {
     use std::os::windows::process::CommandExt;
     use std::process::Command;
 
@@ -177,11 +180,10 @@ fn fetch_latest_release_json() -> Result<String, String> {
     let script = format!(
         "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; \
          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; \
-         $ProgressPreference = 'SilentlyContinue'; \
+         $ProgressPreference = 'SilentlyContinue'; $ErrorActionPreference = 'Stop'; \
          $resp = Invoke-WebRequest -UseBasicParsing -Uri '{url}' \
-           -Headers @{{'User-Agent'='KuroCat/{ver}'; 'Accept'='application/vnd.github+json'}} -TimeoutSec 15; \
+           -Headers @{{'User-Agent'='KuroCat/{ver}'; 'Accept'='{accept}'}} -TimeoutSec 15; \
          Write-Output $resp.Content",
-        url = REPO_API_LATEST,
         ver = CURRENT_VERSION
     );
 
@@ -215,7 +217,7 @@ fn fetch_latest_release_json() -> Result<String, String> {
 }
 
 #[cfg(not(windows))]
-fn fetch_latest_release_json() -> Result<String, String> {
+fn fetch_release_text(url: &str, accept: &str) -> Result<String, String> {
     use std::process::Command;
 
     let output = Command::new("/usr/bin/curl")
@@ -228,8 +230,8 @@ fn fetch_latest_release_json() -> Result<String, String> {
             "-H",
             &format!("User-Agent: KuroCat/{}", CURRENT_VERSION),
             "-H",
-            "Accept: application/vnd.github+json",
-            REPO_API_LATEST,
+            &format!("Accept: {accept}"),
+            url,
         ])
         .output()
         .map_err(|e| format!("无法调用 curl 检查更新: {}", e))?;
@@ -250,10 +252,64 @@ fn fetch_latest_release_json() -> Result<String, String> {
     Ok(text)
 }
 
+fn public_release_tag(page: &str) -> Option<&str> {
+    let prefix = format!("src=\"{PUBLIC_ASSETS_PATH}");
+    let (_, tail) = page.split_once(&prefix)?;
+    let (tag, _) = tail.split_once('"')?;
+    let parts: Vec<_> = tag.strip_prefix('v')?.split('.').collect();
+    (parts.len() == 3 && parts.iter().all(|part| part.parse::<u64>().is_ok())).then_some(tag)
+}
+
+fn public_release_assets(tag: &str, page: &str) -> Vec<GhAsset> {
+    let prefix = format!("href=\"{PUBLIC_DOWNLOAD_PATH}{tag}/");
+    page.split("<li")
+        .filter_map(|row| {
+            let (_, tail) = row.split_once(&prefix)?;
+            let (name, _) = tail.split_once('"')?;
+            if name.is_empty()
+                || !name.bytes().all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c))
+            {
+                return None;
+            }
+            // The public list supplies a digest independently of the REST quota.
+            // Without it, leave downloads to the verified release page.
+            let (_, tail) = tail.split_once("value=\"sha256:")?;
+            let (hex, _) = tail.split_once('"')?;
+            let digest = extract_sha256(&Some(hex.to_string()))?;
+            Some(GhAsset {
+                name: name.to_string(),
+                browser_download_url: format!("https://github.com{PUBLIC_DOWNLOAD_PATH}{tag}/{name}"),
+                size: None,
+                digest: Some(digest),
+            })
+        })
+        .collect()
+}
+
+fn fetch_latest_release() -> Result<GhRelease, String> {
+    let api = fetch_release_text(REPO_API_LATEST, "application/vnd.github+json")
+        .and_then(|raw| serde_json::from_str(&raw).map_err(|e| e.to_string()));
+    let api_error = match api {
+        Ok(release) => return Ok(release),
+        Err(error) => error,
+    };
+    let page = fetch_release_text(REPO_RELEASES_PAGE, "text/html")
+        .map_err(|error| format!("{api_error}；发布页也无法访问：{error}"))?;
+    let tag = public_release_tag(&page)
+        .ok_or_else(|| "无法从 GitHub 发布页识别最新版本".to_string())?;
+    let assets = fetch_release_text(&format!("{PUBLIC_ASSETS_PATH}{tag}"), "text/html")
+        .map(|page| public_release_assets(tag, &page))
+        .unwrap_or_default();
+    Ok(GhRelease {
+        tag_name: tag.to_string(),
+        html_url: Some(format!("https://github.com/xiao97m-collab/kurocat/releases/tag/{tag}")),
+        body: None,
+        assets,
+    })
+}
+
 pub fn check_latest_update() -> Result<UpdateInfo, String> {
-    let raw_json = fetch_latest_release_json()?;
-    let rel: GhRelease = serde_json::from_str(&raw_json)
-        .map_err(|e| format!("解析最新版本信息失败: {}", e))?;
+    let rel = fetch_latest_release()?;
 
     let latest_clean = rel
         .tag_name
@@ -320,7 +376,7 @@ fn download_and_verify_windows(url: &str, dest: &PathBuf, expected_sha256: Optio
     let script = format!(
         "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; \
          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; \
-         $ProgressPreference = 'SilentlyContinue'; \
+         $ProgressPreference = 'SilentlyContinue'; $ErrorActionPreference = 'Stop'; \
          $dst = '{dst}'; \
          Invoke-WebRequest -UseBasicParsing -Uri '{url}' -Headers @{{'User-Agent'='KuroCat/{ver}'}} -OutFile $dst -TimeoutSec 180; \
          if (-not (Test-Path $dst) -or (Get-Item $dst).Length -lt 500000) {{ throw '下载文件不完整' }}; \
@@ -680,6 +736,30 @@ mod tests {
             Some("05c1be2c444f5303770f6d59e216bc0ed7b69321fc44368e4ec231405570f950")
         );
         assert_eq!(extract_sha256(&Some("sha256:short".to_string())), None);
+    }
+
+    #[test]
+    fn public_release_fallback_keeps_only_official_assets_with_digests() {
+        let tag_page = format!("<include-fragment src=\"{PUBLIC_ASSETS_PATH}v1.2.4\">");
+        assert_eq!(public_release_tag(&tag_page), Some("v1.2.4"));
+        let invalid_tag = format!("<include-fragment src=\"{PUBLIC_ASSETS_PATH}v1.2.4/other\">");
+        assert_eq!(public_release_tag(&invalid_tag), None);
+        let hash = "53439a4330e7c7bd7030d40e3f9cd9435e62c38ca73a2a18be9df329bb220e50";
+        let filename = "KuroCat-v1.2.4-macos-arm64.app.tar.gz";
+        let page = format!(
+            r#"<ul>
+              <li><a href="{PUBLIC_DOWNLOAD_PATH}v1.2.4/{filename}">Official</a>
+                  <clipboard-copy value="sha256:{hash}"></clipboard-copy></li>
+              <li><a href="{PUBLIC_DOWNLOAD_PATH}v1.2.4/KuroCat-v1.2.4-macos-arm64.dmg">No digest</a></li>
+              <li><a href="/elsewhere/releases/download/v1.2.4/untrusted.exe">Other repo</a>
+                  <clipboard-copy value="sha256:{hash}"></clipboard-copy></li>
+            </ul>"#
+        );
+        let assets = public_release_assets("v1.2.4", &page);
+        assert_eq!(assets.len(), 1);
+        assert_eq!(assets[0].name, filename);
+        assert_eq!(assets[0].digest.as_deref(), Some(hash));
+        assert!(assets[0].browser_download_url.starts_with("https://github.com/xiao97m-collab/kurocat/"));
     }
 
     #[test]
