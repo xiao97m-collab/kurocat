@@ -112,12 +112,12 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "switch_cat",
-            "description": "Switch the active desktop pet to black, duorou or corgi.",
+            "description": "Switch the active desktop pet to black, duorou, corgi or golden.",
             "inputSchema": {
                 "type": "object",
                 "required": ["id"],
                 "properties": {
-                    "id": { "type": "string", "enum": ["black", "duorou", "corgi"] }
+                    "id": { "type": "string", "enum": ["black", "duorou", "corgi", "golden"] }
                 }
             }
         },
@@ -147,7 +147,7 @@ fn tool_definitions() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "catBreed": { "type": "string", "enum": ["black", "duorou", "corgi"] },
+                    "catBreed": { "type": "string", "enum": ["black", "duorou", "corgi", "golden"] },
                     "scale": { "type": "number", "minimum": 0.2, "maximum": 1.5 },
                     "keyboardLayout": { "type": "string", "enum": ["65", "108"] },
                     "keyboardTheme": { "type": "string", "enum": ["classic", "voyage", "rgb", "terminal"] },
@@ -228,7 +228,7 @@ fn execute_tool(name: &str, args: &Value, on_change: &dyn Fn()) -> Value {
             };
             let id = sanitize_cat_id(id_raw);
             if !is_desktop_cat(&id) {
-                return err_text("Available desktop pets: black, duorou, corgi.");
+                return err_text("Available desktop pets: black, duorou, corgi, golden.");
             }
             let mut s = load_settings();
             s.cat_breed = id.clone();
@@ -272,7 +272,7 @@ fn execute_tool(name: &str, args: &Value, on_change: &dyn Fn()) -> Value {
                 if is_desktop_cat(&clean) {
                     s.cat_breed = clean;
                 } else {
-                    return err_text("Available desktop pets: black, duorou, corgi.");
+                    return err_text("Available desktop pets: black, duorou, corgi, golden.");
                 }
             }
             if let Some(scale) = args.get("scale").and_then(|v| v.as_f64()) {

@@ -9,7 +9,7 @@ mod tray;
 mod typing_follow;
 mod updater;
 
-use cats::{cats_path, desktop_cats, CatSkinConfig, CORGI_ID, DUOROU_ID};
+use cats::{cats_path, desktop_cats, CatSkinConfig, CORGI_ID, DUOROU_ID, GOLDEN_ID};
 use config::{
     config_path, load_settings, normalize_cat_breed, normalize_keyboard_layout,
     normalize_keyboard_orientation, normalize_keyboard_theme, normalize_pet_skin, save_settings,
@@ -28,8 +28,12 @@ pub const BASE_HEIGHT_108: f64 = 456.0;
 pub const MIN_WINDOW_WIDTH: f64 = 260.0;
 pub const MIN_WINDOW_HEIGHT: f64 = 410.0;
 
+fn uses_compact_keyboard(breed: &str) -> bool {
+    matches!(breed, DUOROU_ID | GOLDEN_ID)
+}
+
 fn pet_keyboard_layout(settings: &AppSettings) -> &str {
-    if settings.cat_breed == DUOROU_ID {
+    if uses_compact_keyboard(&settings.cat_breed) {
         "65"
     } else {
         &settings.keyboard_layout
@@ -343,11 +347,11 @@ pub fn apply_scale_and_save(app: &AppHandle, scale: f64) {
 pub fn apply_keyboard_layout_and_save(app: &AppHandle, layout: &str) {
     let normalized = normalize_keyboard_layout(layout);
     let state = app.state::<AppState>();
-    let (cur_scale, is_duorou) = {
+    let (cur_scale, compact_only) = {
         let settings = state.settings.lock().unwrap();
-        (settings.scale, settings.cat_breed == DUOROU_ID)
+        (settings.scale, uses_compact_keyboard(&settings.cat_breed))
     };
-    let effective_layout = if is_duorou { "65" } else { &normalized };
+    let effective_layout = if compact_only { "65" } else { &normalized };
     let new_pos = app.get_webview_window("main").and_then(|win| {
         resize_window_anchored_bottom_right(&win, effective_layout, cur_scale)
     });
@@ -573,6 +577,13 @@ fn is_over_duorou(rx: f64, ry: f64) -> (bool, bool) {
     (body || keyboard || mouse, body)
 }
 
+fn is_over_golden(rx: f64, ry: f64) -> (bool, bool) {
+    let body = ((rx - 0.51) / 0.44).powi(2) + ((ry - 0.56) / 0.28).powi(2) <= 1.0;
+    let keyboard = (0.22..=0.56).contains(&rx) && (0.71..=0.82).contains(&ry);
+    let mouse = ((rx - 0.150) / 0.054).powi(2) + ((ry - 0.736) / 0.061).powi(2) <= 1.0;
+    (body || keyboard || mouse, body)
+}
+
 fn is_over_corgi(rx: f64, ry: f64, is_108: bool) -> (bool, bool) {
     let (width, height) = base_dimensions(if is_108 { "108" } else { "65" });
     let x = rx * width;
@@ -688,6 +699,8 @@ fn start_hit_test_loop(
 
             let (over_interactive, raw_over_cat) = if inside_pet && pet == DUOROU_ID {
                 is_over_duorou(pet_rx, pet_ry)
+            } else if inside_pet && pet == GOLDEN_ID {
+                is_over_golden(pet_rx, pet_ry)
             } else if inside_pet && pet == CORGI_ID {
                 is_over_corgi(pet_rx, pet_ry, layout_str == "108")
             } else if inside_pet {

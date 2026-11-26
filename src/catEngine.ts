@@ -240,6 +240,13 @@ export class KuroCatEngine {
     return this.getKeyWorldCenter(spec);
   }
 
+  public hasHeldPetKey(): boolean {
+    for (const key of this.keyAnims.values()) {
+      if (key.pressed) return true;
+    }
+    return false;
+  }
+
   public showPetKeyContact(keyId: string): void {
     const key = this.keyAnims.get(keyId);
     if (key) key.pressAmount = Math.max(key.pressAmount, 0.77);
@@ -305,6 +312,8 @@ export class KuroCatEngine {
     }
 
     if (layoutChanged) {
+      // A key released after switching layouts might no longer have a matching cap.
+      for (const key of this.keyAnims.values()) key.pressed = false;
       this.leftPaw.pos = { x: this.catCenterX - 18, y: this.catBaseY };
       this.leftPaw.target = { x: this.catCenterX - 18, y: this.catBaseY };
       this.rightPaw.pos = { x: this.catCenterX + 18, y: this.catBaseY };

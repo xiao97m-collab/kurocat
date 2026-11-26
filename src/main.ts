@@ -13,6 +13,7 @@ import { isPetSkin, supportsWardrobe, type PetSkin } from './pets/wardrobe';
 import { createLandingPainter, isLandingBreed, loadLandingAtlas } from './pets/landing-motion';
 
 const duorouId = 'duorou';
+const goldenId = 'golden';
 const isMac = /Mac/i.test(navigator.platform) || /Macintosh/i.test(navigator.userAgent);
 
 interface AppSettings {
@@ -121,10 +122,12 @@ const btnToastInstallEl = document.getElementById('btn-toast-install') as HTMLBu
 const btnToastOpenEl = document.getElementById('btn-toast-open') as HTMLButtonElement;
 const btnToastCloseEl = document.getElementById('btn-toast-close') as HTMLButtonElement;
 const engine = new KuroCatEngine(canvas);
-type DesktopPet = Awaited<ReturnType<typeof loadDuorou>> | Awaited<ReturnType<typeof import('./pets/corgi').loadCorgi>>;
+type DesktopPet = Awaited<ReturnType<typeof loadDuorou>> | Awaited<ReturnType<typeof import('./pets/corgi').loadCorgi>>
+  | Awaited<ReturnType<typeof import('./pets/golden').loadGolden>>;
 const petLoaders: Record<string, () => Promise<DesktopPet>> = {
   duorou: () => import('./pets/duorou').then(module => module.loadDuorou(engine)),
   corgi: () => import('./pets/corgi').then(module => module.loadCorgi(engine)),
+  golden: () => import('./pets/golden').then(module => module.loadGolden(engine)),
 };
 const petLoads = new Map<string, Promise<DesktopPet>>();
 let activePet: DesktopPet | null = null;
@@ -232,16 +235,18 @@ function syncMenuUI(): void {
   }
 
   const isDuorou = settings.catBreed === duorouId;
+  const isGolden = settings.catBreed === goldenId;
+  const compactOnly = isDuorou || isGolden;
   const hasWardrobe = supportsWardrobe(settings.catBreed);
   const skin = isPetSkin(settings.petSkin) ? settings.petSkin : settings.blueScarf ? 'classic' : 'plain';
   petSkinEl.hidden = !hasWardrobe;
-  scarfButton.hidden = isDuorou || hasWardrobe;
+  scarfButton.hidden = compactOnly || hasWardrobe;
   petSkinEl.querySelectorAll<HTMLButtonElement>('[data-pet-skin]').forEach(btn => {
     const active = btn.dataset.petSkin === skin;
     btn.classList.toggle('active', active);
     btn.setAttribute('aria-pressed', String(active));
   });
-  const kbLayout: KeyboardLayoutId = !isDuorou && settings.keyboardLayout === '108' ? '108' : '65';
+  const kbLayout: KeyboardLayoutId = !compactOnly && settings.keyboardLayout === '108' ? '108' : '65';
   const kbOrient: KeyboardOrientation = !isDuorou && settings.keyboardOrientation === 'viewer' ? 'viewer' : 'cat';
   keyboardLayoutEl.hidden = isDuorou;
   equipmentEl.querySelectorAll<HTMLButtonElement>('[data-pet-equipment]').forEach((btn) => {
@@ -251,7 +256,7 @@ function syncMenuUI(): void {
   });
   document.querySelectorAll<HTMLButtonElement>('[data-kblayout]').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.kblayout === kbLayout);
-    btn.disabled = isDuorou;
+    btn.disabled = compactOnly;
   });
   document.querySelectorAll<HTMLButtonElement>('[data-kborient]').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.kborient === kbOrient);
@@ -270,9 +275,9 @@ function syncMenuUI(): void {
 
   engine.showKeyBubbles = settings.showKeyBubbles;
   engine.keyboardTheme = theme;
-  engine.petDecorations = { weekdaySign, blueScarf: !isDuorou && !hasWardrobe && settings.blueScarf };
+  engine.petDecorations = { weekdaySign, blueScarf: !compactOnly && !hasWardrobe && settings.blueScarf };
   engine.petSkin = hasWardrobe ? skin : 'plain';
-  engine.setCatAppearance(isDuorou ? 'black' : activeCat?.id || 'black', isDuorou ? null : activeCat);
+  engine.setCatAppearance(compactOnly ? 'black' : activeCat?.id || 'black', compactOnly ? null : activeCat);
   const layoutChanged = engine.keyboardLayout !== kbLayout || engine.keyboardOrientation !== kbOrient;
   engine.setKeyboardConfig(kbLayout, kbOrient);
   if (layoutChanged) activePet?.reset();

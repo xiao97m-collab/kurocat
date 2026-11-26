@@ -427,14 +427,23 @@ pub fn builtin_cats() -> Vec<CatSkinConfig> {
     corgi.fur_color = "#edb583".to_string();
     corgi.accent_color = Some("#edbc89".to_string());
     cats.push(corgi);
+    let mut golden = cats[0].clone();
+    golden.id = GOLDEN_ID.to_string();
+    golden.name = "二狗".to_string();
+    golden.emoji = Some("🐱".to_string());
+    golden.fur_color = "#e8d6bf".to_string();
+    golden.eye_color_top = "#8497a8".to_string();
+    golden.accent_color = Some("#e8c99d".to_string());
+    cats.push(golden);
     cats
 }
 
 pub const DUOROU_ID: &str = "duorou";
 pub const CORGI_ID: &str = "corgi";
+pub const GOLDEN_ID: &str = "golden";
 
 pub fn is_desktop_cat(id: &str) -> bool {
-    matches!(id, "black" | DUOROU_ID | CORGI_ID)
+    matches!(id, "black" | DUOROU_ID | CORGI_ID | GOLDEN_ID)
 }
 
 pub fn desktop_cats() -> Vec<CatSkinConfig> {
@@ -471,7 +480,7 @@ pub fn all_cats() -> Vec<CatSkinConfig> {
     let mut list = builtin_cats();
     let custom = load_custom_cats();
     for c in custom {
-        if matches!(c.id.as_str(), DUOROU_ID | CORGI_ID) {
+        if matches!(c.id.as_str(), DUOROU_ID | CORGI_ID | GOLDEN_ID) {
             continue;
         }
         if let Some(existing) = list.iter_mut().find(|x| x.id == c.id) {
@@ -488,7 +497,7 @@ pub fn all_cats() -> Vec<CatSkinConfig> {
 
 pub fn upsert_custom_cat(mut cat: CatSkinConfig) -> Result<CatSkinConfig, String> {
     cat.id = sanitize_cat_id(&cat.id);
-    if matches!(cat.id.as_str(), DUOROU_ID | CORGI_ID) {
+    if matches!(cat.id.as_str(), DUOROU_ID | CORGI_ID | GOLDEN_ID) {
         return Err("该角色使用内置动作素材".to_string());
     }
     if cat.name.trim().is_empty() {
@@ -525,7 +534,7 @@ pub fn cat_exists(id: &str) -> bool {
 
 pub fn cat_schema_guide() -> serde_json::Value {
     serde_json::json!({
-        "description": "KuroCat Custom Cat Skin Schema. Pass custom cat JSON to upsert_cat to save a skin. Available desktop pets are black, duorou and corgi.",
+        "description": "KuroCat Custom Cat Skin Schema. Pass custom cat JSON to upsert_cat to save a skin. Available desktop pets are black, duorou, corgi and golden.",
         "patterns": {
             "solid": "Single coat color (e.g., British Shorthair blue, white Persian, golden chinchilla, black cat)",
             "bicolor": "Ragdoll / bicolor inverted-V face mask (uses maskColor, foreheadBridgeColor, flankColor)",
